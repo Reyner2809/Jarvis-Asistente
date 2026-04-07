@@ -7,10 +7,11 @@ console = Console()
 class CommandHandler:
     """Maneja comandos especiales del usuario (empiezan con /)."""
 
-    def __init__(self, provider_manager, voice_engine, memory):
+    def __init__(self, provider_manager, voice_engine, memory, stt=None):
         self._provider = provider_manager
         self._voice = voice_engine
         self._memory = memory
+        self._stt = stt
 
     def is_command(self, text: str) -> bool:
         return text.strip().startswith("/")
@@ -27,6 +28,8 @@ class CommandHandler:
             "/quit": self._cmd_exit,
             "/voz": self._cmd_voice_toggle,
             "/voice": self._cmd_voice_toggle,
+            "/mic": self._cmd_mic_toggle,
+            "/microfono": self._cmd_mic_toggle,
             "/provider": self._cmd_switch_provider,
             "/proveedor": self._cmd_switch_provider,
             "/clear": self._cmd_clear,
@@ -53,10 +56,17 @@ class CommandHandler:
         self._voice.toggle()
         return True
 
+    def _cmd_mic_toggle(self, args: str) -> bool:
+        if self._stt is None:
+            console.print("[red]El reconocimiento de voz no esta disponible.[/red]")
+            return True
+        self._stt.toggle()
+        return True
+
     def _cmd_switch_provider(self, args: str) -> bool:
         if not args:
             console.print(f"[cyan]Proveedor actual: {self._provider.current_provider_name.upper()}[/cyan]")
-            console.print("[dim]Uso: /proveedor <claude|openai|gemini>[/dim]")
+            console.print("[dim]Uso: /proveedor <claude|openai|gemini|ollama>[/dim]")
         else:
             self._provider.switch_provider(args.strip())
         return True
@@ -68,12 +78,16 @@ class CommandHandler:
 
     def _cmd_status(self, args: str) -> bool:
         stats = self._memory.get_stats()
+        mic_status = "No disponible"
+        if self._stt:
+            mic_status = "Activado" if self._stt.is_enabled else "Desactivado"
 
         table = Table(title="Estado de JARVIS", show_header=False, border_style="cyan")
         table.add_column("Campo", style="bold cyan")
         table.add_column("Valor", style="white")
         table.add_row("Proveedor IA", self._provider.current_provider_name.upper())
-        table.add_row("Voz", "Activada" if self._voice.is_enabled else "Desactivada")
+        table.add_row("Voz (respuesta)", "Activada" if self._voice.is_enabled else "Desactivada")
+        table.add_row("Microfono", mic_status)
         table.add_row("Mensajes (sesion)", str(stats["total"]))
         table.add_row("Tuyos", str(stats["user"]))
         table.add_row("Mios", str(stats["assistant"]))
@@ -86,10 +100,12 @@ class CommandHandler:
         table.add_column("Comando", style="bold green")
         table.add_column("Descripcion", style="white")
         table.add_row("/ayuda, /help", "Muestra esta ayuda")
-        table.add_row("/voz, /voice", "Activa/desactiva la voz")
-        table.add_row("/proveedor <nombre>", "Cambia el proveedor de IA (claude, openai, gemini)")
+        table.add_row("/mic, /microfono", "Activa/desactiva el microfono")
+        table.add_row("/voz, /voice", "Activa/desactiva la voz de respuesta")
+        table.add_row("/proveedor <nombre>", "Cambia el proveedor de IA (claude, openai, gemini, ollama)")
         table.add_row("/estado, /status", "Muestra el estado actual")
         table.add_row("/limpiar, /clear", "Limpia la conversacion")
         table.add_row("/salir, /exit", "Sale del programa")
         console.print(table)
+        console.print("\n[dim]Con el mic activo: presiona Enter sin texto para que escuche tu voz.[/dim]")
         return True

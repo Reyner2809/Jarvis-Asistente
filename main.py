@@ -23,7 +23,7 @@ from prompt_toolkit.styles import Style
 
 from config import Config
 from ai_providers import ProviderManager
-from voice import VoiceEngine
+from voice import VoiceEngine, SpeechToText
 from memory import ConversationMemory
 from utils import CommandHandler
 
@@ -59,16 +59,35 @@ def display_init_status():
     console.print("\n[bold cyan]Inicializando sistemas...[/bold cyan]")
 
 
-def get_user_input() -> str:
+def get_user_input(stt: SpeechToText) -> str:
     os.makedirs(os.path.dirname(PROMPT_HISTORY_FILE), exist_ok=True)
 
     try:
-        user_input = prompt(
-            [("class:prompt", f"\n  {Config.ASSISTANT_NAME} > ")],
-            style=PROMPT_STYLE,
-            history=FileHistory(PROMPT_HISTORY_FILE),
-        )
-        return user_input.strip()
+        # Si el modo escucha esta activo, mostrar indicador
+        if stt.is_enabled:
+            user_input = prompt(
+                [("class:prompt", f"\n  {Config.ASSISTANT_NAME} [MIC] > ")],
+                style=PROMPT_STYLE,
+                history=FileHistory(PROMPT_HISTORY_FILE),
+            )
+            user_input = user_input.strip()
+
+            # Si presiona Enter sin escribir nada, escuchar microfono
+            if not user_input:
+                heard = stt.listen()
+                if heard:
+                    return heard
+                return ""
+
+            return user_input
+        else:
+            user_input = prompt(
+                [("class:prompt", f"\n  {Config.ASSISTANT_NAME} > ")],
+                style=PROMPT_STYLE,
+                history=FileHistory(PROMPT_HISTORY_FILE),
+            )
+            return user_input.strip()
+
     except (EOFError, KeyboardInterrupt):
         return "/salir"
 
@@ -103,15 +122,23 @@ def main():
     voice_engine = VoiceEngine()
     voice_engine.initialize()
 
-    memory = ConversationMemory()
-    cmd_handler = CommandHandler(provider_manager, voice_engine, memory)
+    stt = SpeechToText()
+    mic_available = stt.initialize()
 
-    console.print("[bold green]\n  Sistemas en linea. Listo para servir, senor.[/bold green]\n")
+    memory = ConversationMemory()
+    cmd_handler = CommandHandler(provider_manager, voice_engine, memory, stt)
+
+    console.print("[bold green]\n  Sistemas en linea. Listo para servir, senor.[/bold green]")
+
+    if mic_available:
+        console.print("[dim]  Escribe /mic para activar el microfono[/dim]\n")
+    else:
+        console.print("[dim]  Microfono no disponible. Modo solo texto.\n[/dim]")
 
     # Loop principal
     while True:
         try:
-            user_input = get_user_input()
+            user_input = get_user_input(stt)
 
             if not user_input:
                 continue
@@ -136,7 +163,7 @@ def main():
                 except ConnectionError as e:
                     console.print(f"\n[bold red]Error: {e}[/bold red]")
                     console.print("[yellow]Verifica tu conexion a internet y las API keys.[/yellow]")
-                    memory.messages.pop()  # Remover el mensaje que fallo
+                    memory.messages.pop()
                     continue
                 except Exception as e:
                     console.print(f"\n[bold red]Error inesperado: {e}[/bold red]")
