@@ -22,6 +22,7 @@ class VoiceEngine:
         self._pyttsx_engine = None
         self._voice_lang = Config.VOICE_LANGUAGE
         self._enabled = True
+        self._loop = None
 
     def initialize(self):
         try:
@@ -48,6 +49,13 @@ class VoiceEngine:
             console.print(f"  [yellow]Advertencia: No se pudo inicializar pyttsx3: {e}[/yellow]")
             self._pyttsx_engine = None
 
+    def _get_event_loop(self):
+        """Obtiene o crea un event loop reutilizable."""
+        if self._loop is None or self._loop.is_closed():
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+        return self._loop
+
     def toggle(self):
         self._enabled = not self._enabled
         state = "activada" if self._enabled else "desactivada"
@@ -67,13 +75,15 @@ class VoiceEngine:
             self._speak_pyttsx(text)
 
     def _speak_edge_tts(self, text: str):
+        tmp_path = None
         try:
             voice = EDGE_TTS_VOICES.get(self._voice_lang, "es-VE-SebastianNeural")
 
             with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
                 tmp_path = tmp.name
 
-            asyncio.run(self._generate_edge_audio(text, voice, tmp_path))
+            loop = self._get_event_loop()
+            loop.run_until_complete(self._generate_edge_audio(text, voice, tmp_path))
             self._play_audio(tmp_path)
 
         except Exception as e:
@@ -83,11 +93,12 @@ class VoiceEngine:
             if self._pyttsx_engine:
                 self._speak_pyttsx(text)
         finally:
-            try:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-            except Exception:
-                pass
+            if tmp_path:
+                try:
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+                except Exception:
+                    pass
 
     async def _generate_edge_audio(self, text: str, voice: str, output_path: str):
         import edge_tts
@@ -96,13 +107,6 @@ class VoiceEngine:
 
     def _play_audio(self, file_path: str):
         if sys.platform == "win32":
-            # Usar PowerShell para reproducir audio en Windows
-            ps_cmd = (
-                f'$player = New-Object System.Media.SoundPlayer "{file_path}"; '
-                f'$player.PlaySync(); $player.Dispose()'
-            )
-            # edge-tts genera MP3, PowerShell SoundPlayer solo soporta WAV
-            # Usar ffplay si esta disponible, sino convertir con PowerShell
             try:
                 subprocess.run(
                     ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", file_path],
@@ -110,19 +114,21 @@ class VoiceEngine:
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
             except FileNotFoundError:
-                # Fallback: usar el modulo playsound o Windows Media Player
                 try:
-                    # Usar Windows Media Player via COM
                     ps_script = f'''
 Add-Type -AssemblyName presentationCore
 $mediaPlayer = New-Object System.Windows.Media.MediaPlayer
 $mediaPlayer.Open([System.Uri]::new("{file_path}"))
+Start-Sleep -Milliseconds 300
 $mediaPlayer.Play()
-Start-Sleep -Milliseconds 500
-while ($mediaPlayer.NaturalDuration.HasTimeSpan -and $mediaPlayer.Position -lt $mediaPlayer.NaturalDuration.TimeSpan) {{
+while ($mediaPlayer.NaturalDuration.HasTimeSpan -eq $false) {{
     Start-Sleep -Milliseconds 100
 }}
-Start-Sleep -Milliseconds 200
+while ($mediaPlayer.Position -lt $mediaPlayer.NaturalDuration.TimeSpan) {{
+    Start-Sleep -Milliseconds 100
+}}
+Start-Sleep -Milliseconds 300
+$mediaPlayer.Stop()
 $mediaPlayer.Close()
 '''
                     subprocess.run(
@@ -130,10 +136,10 @@ $mediaPlayer.Close()
                         check=True,
                         creationflags=subprocess.CREATE_NO_WINDOW,
                     )
-                except Exception:
-                    console.print("  [yellow]No se pudo reproducir audio. Instala ffmpeg para mejor experiencia.[/yellow]")
+                except Exception as e:
+                    console.print(f"  [yellow]No se pudo reproducir audio: {e}[/yellow]")
+                    console.print("  [yellow]Instala ffmpeg para mejor experiencia: winget install ffmpeg[/yellow]")
         else:
-            # Linux/Mac
             for player in ["ffplay", "mpv", "aplay", "afplay"]:
                 try:
                     cmd = [player]
