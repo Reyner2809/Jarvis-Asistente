@@ -8,6 +8,8 @@ Uso: python main.py
 
 import sys
 import os
+import threading
+import queue
 
 # Agregar el directorio raiz al path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -17,19 +19,15 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.live import Live
 from rich.spinner import Spinner
-from prompt_toolkit import prompt
-from prompt_toolkit.history import FileHistory
-from prompt_toolkit.styles import Style
 
 from config import Config
 from ai_providers import ProviderManager
 from voice import VoiceEngine, SpeechToText
 from memory import ConversationMemory
 from utils import CommandHandler
+from tools import ToolExecutor, FastCommandDetector
 
 console = Console()
-
-PROMPT_HISTORY_FILE = os.path.join(os.path.dirname(__file__), "data", ".prompt_history")
 
 BANNER = r"""
        ██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗
@@ -40,79 +38,47 @@ BANNER = r"""
    ╚════╝ ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚══════╝
 """
 
-PROMPT_STYLE = Style.from_dict({
-    "prompt": "#00d4ff bold",
-})
-
 
 def display_banner():
     banner_text = Text(BANNER, style="bold cyan")
     panel = Panel(
         banner_text,
-        subtitle="[dim]Escribe /ayuda para ver comandos[/dim]",
+        subtitle="[dim]Escribe /ayuda para ver comandos | Habla en cualquier momento[/dim]",
         border_style="cyan",
     )
     console.print(panel)
 
 
-def display_init_status():
-    console.print("\n[bold cyan]Inicializando sistemas...[/bold cyan]")
-
-
-def get_user_input(stt: SpeechToText) -> str:
-    os.makedirs(os.path.dirname(PROMPT_HISTORY_FILE), exist_ok=True)
-
-    try:
-        # Si el modo escucha esta activo, mostrar indicador
-        if stt.is_enabled:
-            user_input = prompt(
-                [("class:prompt", f"\n  {Config.ASSISTANT_NAME} [MIC] > ")],
-                style=PROMPT_STYLE,
-                history=FileHistory(PROMPT_HISTORY_FILE),
-            )
-            user_input = user_input.strip()
-
-            # Si presiona Enter sin escribir nada, escuchar microfono
-            if not user_input:
-                heard = stt.listen()
-                if heard:
-                    return heard
-                return ""
-
-            return user_input
-        else:
-            user_input = prompt(
-                [("class:prompt", f"\n  {Config.ASSISTANT_NAME} > ")],
-                style=PROMPT_STYLE,
-                history=FileHistory(PROMPT_HISTORY_FILE),
-            )
-            return user_input.strip()
-
-    except (EOFError, KeyboardInterrupt):
-        return "/salir"
-
-
-def display_thinking():
-    return Live(
-        Spinner("dots", text="[cyan] Procesando...[/cyan]", style="cyan"),
-        console=console,
-        transient=True,
-    )
-
-
-def display_response(text: str, provider_name: str):
+def display_response(text: str, source: str = ""):
+    title = f"[bold cyan]{Config.ASSISTANT_NAME}[/bold cyan]"
+    if source:
+        title += f" [dim]({source})[/dim]"
     panel = Panel(
         text,
-        title=f"[bold cyan]{Config.ASSISTANT_NAME}[/bold cyan] [dim]({provider_name})[/dim]",
+        title=title,
         border_style="cyan",
         padding=(1, 2),
     )
     console.print(panel)
 
 
+def keyboard_input_thread(input_queue: queue.Queue, stop_event: threading.Event):
+    """Hilo que lee input del teclado sin bloquear el hilo principal."""
+    while not stop_event.is_set():
+        try:
+            text = input()
+            if text is not None:
+                input_queue.put(("keyboard", text.strip()))
+        except EOFError:
+            input_queue.put(("keyboard", "/salir"))
+            break
+        except Exception:
+            break
+
+
 def main():
     display_banner()
-    display_init_status()
+    console.print("\n[bold cyan]Inicializando sistemas...[/bold cyan]")
 
     # Inicializar componentes
     provider_manager = ProviderManager()
@@ -125,67 +91,164 @@ def main():
     stt = SpeechToText()
     mic_available = stt.initialize()
 
+    tool_executor = ToolExecutor()
+    fast_cmd = FastCommandDetector()
     memory = ConversationMemory()
     cmd_handler = CommandHandler(provider_manager, voice_engine, memory, stt)
+    system_prompt = Config.get_system_prompt()
+
+    # Cola unificada para input (voz y teclado)
+    input_queue = queue.Queue()
+    stop_event = threading.Event()
+
+    # Iniciar escucha de voz continua
+    if mic_available:
+        stt.start_listening()
+
+    # Iniciar hilo de teclado
+    kb_thread = threading.Thread(
+        target=keyboard_input_thread,
+        args=(input_queue, stop_event),
+        daemon=True,
+    )
+    kb_thread.start()
 
     console.print("[bold green]\n  Sistemas en linea. Listo para servir, senor.[/bold green]")
-
+    console.print("[dim]  Control del PC activado. Puedo abrir apps, buscar en la web, y mas.[/dim]")
     if mic_available:
-        console.print("[dim]  Escribe /mic para activar el microfono[/dim]\n")
+        console.print(f'[dim]  Di "{Config.ASSISTANT_NAME}" + tu comando para activarme por voz.[/dim]')
+        console.print("[dim]  Tambien puedes escribir directamente.[/dim]")
     else:
-        console.print("[dim]  Microfono no disponible. Modo solo texto.\n[/dim]")
+        console.print("[dim]  Microfono no disponible. Escribe tus comandos.[/dim]")
+
+    console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
 
     # Loop principal
-    while True:
+    while not stop_event.is_set():
         try:
-            user_input = get_user_input(stt)
+            user_input = None
+            source = ""
+
+            # Revisar si hay input de voz
+            if mic_available:
+                voice_text = stt.get_speech(timeout=0.05)
+                if voice_text:
+                    if voice_text == "__WAKE__":
+                        # Solo dijo "Jarvis" sin comando -> activar escucha temporal
+                        stt.activate_listening()
+                        console.print(f"\n  [bold cyan]Digame, senor.[/bold cyan]")
+                        stt.pause()
+                        voice_engine.speak("Digame, senor.")
+                        stt.resume()
+                        console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
+                        continue
+                    # Desactivar escucha activa al recibir comando
+                    stt.deactivate_listening()
+                    user_input = voice_text
+                    source = "voz"
+                    console.print(f"\n  [green]Escuche:[/green] \"{user_input}\"")
+
+            # Revisar si hay input de teclado
+            if user_input is None:
+                try:
+                    msg_type, text = input_queue.get(timeout=0.1)
+                    if text:
+                        user_input = text
+                        source = "texto"
+                except queue.Empty:
+                    continue
 
             if not user_input:
+                console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
                 continue
 
-            # Manejar comandos
+            # Si el usuario escribio solo "Jarvis" por teclado, tratarlo como wake word
+            if SpeechToText.is_wake_word(user_input):
+                if mic_available:
+                    stt.activate_listening()
+                console.print(f"\n  [bold cyan]Digame, senor.[/bold cyan]")
+                if mic_available:
+                    stt.pause()
+                voice_engine.speak("Digame, senor.")
+                if mic_available:
+                    stt.resume()
+                console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
+                continue
+
+            # Manejar comandos del sistema
             if cmd_handler.is_command(user_input):
                 should_continue = cmd_handler.handle(user_input)
                 if not should_continue:
                     break
+                console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
                 continue
 
-            # Agregar mensaje del usuario a memoria
+            # FAST PATH: Intentar ejecutar comando rapido sin IA
+            handled, fast_response = fast_cmd.try_execute(user_input)
+            if handled:
+                memory.add_message("user", user_input)
+                memory.add_message("assistant", fast_response)
+                display_response(fast_response)
+
+                # Pausar mic mientras habla, luego reanudar
+                if mic_available:
+                    stt.pause()
+                voice_engine.speak(fast_response)
+                if mic_available:
+                    stt.resume()
+
+                console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
+                continue
+
+            # SLOW PATH: Enviar a la IA
             memory.add_message("user", user_input)
 
-            # Obtener respuesta de la IA
-            with display_thinking():
+            console.print("")
+            with Live(
+                Spinner("dots", text="[cyan] Procesando...[/cyan]", style="cyan"),
+                console=console,
+                transient=True,
+            ):
                 try:
                     response = provider_manager.chat(
                         memory.get_context_messages(),
-                        Config.SYSTEM_PROMPT,
+                        system_prompt,
                     )
                 except ConnectionError as e:
-                    console.print(f"\n[bold red]Error: {e}[/bold red]")
-                    console.print("[yellow]Verifica tu conexion a internet y las API keys.[/yellow]")
+                    console.print(f"[bold red]Error: {e}[/bold red]")
                     memory.messages.pop()
+                    console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
                     continue
                 except Exception as e:
-                    console.print(f"\n[bold red]Error inesperado: {e}[/bold red]")
+                    console.print(f"[bold red]Error inesperado: {e}[/bold red]")
                     memory.messages.pop()
+                    console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
                     continue
 
-            # Guardar respuesta en memoria
-            memory.add_message("assistant", response)
+            # Ejecutar herramientas si la IA las solicito
+            clean_response, tool_results = tool_executor.process_response(response)
 
-            # Mostrar respuesta
-            display_response(response, provider_manager.current_provider_name)
+            memory.add_message("assistant", clean_response)
+            display_response(clean_response, provider_manager.current_provider_name)
 
-            # Hablar la respuesta
-            voice_engine.speak(response)
+            # Pausar mic mientras habla
+            if mic_available:
+                stt.pause()
+            voice_engine.speak(clean_response)
+            if mic_available:
+                stt.resume()
+
+            console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
 
         except KeyboardInterrupt:
-            console.print("\n")
-            memory.save_session()
-            console.print(f"\n[bold cyan]Sesion interrumpida. Hasta pronto, senor.[/bold cyan]\n")
             break
 
+    # Cleanup
+    stop_event.set()
+    if mic_available:
+        stt.stop_listening()
     memory.save_session()
+    console.print(f"\n[bold cyan]Hasta luego, senor. Estare aqui cuando me necesite.[/bold cyan]\n")
 
 
 if __name__ == "__main__":

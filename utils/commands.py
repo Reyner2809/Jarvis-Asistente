@@ -60,7 +60,11 @@ class CommandHandler:
         if self._stt is None:
             console.print("[red]El reconocimiento de voz no esta disponible.[/red]")
             return True
-        self._stt.toggle()
+        if self._stt.is_enabled:
+            self._stt.stop_listening()
+            console.print("[cyan]Microfono desactivado.[/cyan]")
+        else:
+            self._stt.start_listening()
         return True
 
     def _cmd_switch_provider(self, args: str) -> bool:
@@ -79,8 +83,8 @@ class CommandHandler:
     def _cmd_status(self, args: str) -> bool:
         stats = self._memory.get_stats()
         mic_status = "No disponible"
-        if self._stt:
-            mic_status = "Activado" if self._stt.is_enabled else "Desactivado"
+        if self._stt and self._stt.is_available:
+            mic_status = "Escuchando" if self._stt.is_enabled else "Desactivado"
 
         table = Table(title="Estado de JARVIS", show_header=False, border_style="cyan")
         table.add_column("Campo", style="bold cyan")
