@@ -74,6 +74,43 @@ class ProviderManager:
             f"Todos los proveedores fallaron. Ultimo error: {last_error}"
         )
 
+    def search_and_answer(self, question: str) -> str | None:
+        """Busca en internet con DuckDuckGo y resume con la IA activa."""
+        from tools.web_search import search_internet
+        from config import Config
+
+        results = search_internet(question)
+        if not results:
+            return None
+
+        # Construir prompt para que la IA resuma los resultados
+        search_prompt = (
+            f"Eres {Config.ASSISTANT_NAME}, asistente IA personal. "
+            "El usuario hizo una pregunta que requiere informacion actual de internet. "
+            "A continuacion estan los resultados de busqueda. "
+            "Resume la informacion relevante en espanol, se conciso (2-4 frases max). "
+            "Llama al usuario 'senor' a veces. "
+            "NO digas 'segun los resultados' ni 'encontre en internet', responde como si supieras la info."
+        )
+
+        messages = [
+            {"role": "user", "content": f"Pregunta: {question}\n\nResultados de internet:\n{results}"},
+        ]
+
+        # Usar el proveedor activo (Ollama u otro) para resumir
+        last_error = None
+        for provider_name in self._fallback_order:
+            provider = self._providers[provider_name]
+            if not provider.is_available():
+                continue
+            try:
+                return provider.chat(messages, search_prompt)
+            except Exception as e:
+                last_error = e
+                continue
+
+        return None
+
     def switch_provider(self, provider_name: str) -> bool:
         provider_name = provider_name.lower()
         if provider_name not in self._providers:

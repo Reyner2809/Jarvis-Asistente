@@ -3,6 +3,7 @@ import re
 from rich.console import Console
 from . import pc_control
 from . import automation
+from .code_executor import execute_code
 
 console = Console()
 
@@ -123,6 +124,11 @@ TOOLS = {
         "description": "Abre app/web y busca algo (youtube, google, github, etc.)",
         "params": ["app_or_url", "search_text"],
     },
+    "execute_code": {
+        "function": execute_code,
+        "description": "Ejecuta codigo Python para cualquier tarea (crear archivos, documentos, manipular datos, instalar programas, etc.)",
+        "params": ["code"],
+    },
 }
 
 
@@ -140,8 +146,8 @@ class ToolExecutor:
     """Detecta y ejecuta herramientas en las respuestas de la IA."""
 
     TOOL_PATTERN = re.compile(
-        r'\[TOOL:(\w+)\s*\{([^}]*)\}\]',
-        re.IGNORECASE,
+        r'\[TOOL:(\w+)\s*(\{(?:[^{}]|\{[^{}]*\})*\})\]',
+        re.IGNORECASE | re.DOTALL,
     )
 
     def process_response(self, response: str) -> tuple[str, list[dict]]:
@@ -154,7 +160,7 @@ class ToolExecutor:
         for match in matches:
             tool_name = match.group(1).strip().lower()
             params_str = match.group(2).strip()
-            params = self._parse_params(params_str)
+            params = self._parse_params_json(params_str)
             result = self._execute_tool(tool_name, params)
             results.append(result)
 
@@ -168,17 +174,30 @@ class ToolExecutor:
 
         return clean_response, results
 
-    def _parse_params(self, params_str: str) -> dict:
+    def _parse_params_json(self, params_str: str) -> dict:
+        """Parsea los parametros JSON de un tool call."""
         if not params_str:
             return {}
 
+        # Intentar parsear como JSON completo (ya incluye {})
         try:
-            return json.loads("{" + params_str + "}")
+            return json.loads(params_str)
         except json.JSONDecodeError:
             pass
 
+        # Fallback: quitar llaves externas y parsear
+        inner = params_str.strip()
+        if inner.startswith("{") and inner.endswith("}"):
+            inner = inner[1:-1].strip()
+
+        try:
+            return json.loads("{" + inner + "}")
+        except json.JSONDecodeError:
+            pass
+
+        # Ultimo recurso: regex simple para key:value
         params = {}
-        for part in re.finditer(r'(\w+)\s*[:=]\s*["\']?([^"\'",}]+)["\']?', params_str):
+        for part in re.finditer(r'(\w+)\s*[:=]\s*["\']?([^"\'",}]+)["\']?', inner):
             key = part.group(1).strip()
             value = part.group(2).strip()
             try:

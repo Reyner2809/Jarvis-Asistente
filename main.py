@@ -20,12 +20,42 @@ from rich.text import Text
 from rich.live import Live
 from rich.spinner import Spinner
 
+import re
+
 from config import Config
 from ai_providers import ProviderManager
 from voice import VoiceEngine, SpeechToText
 from memory import ConversationMemory
 from utils import CommandHandler
 from tools import ToolExecutor, FastCommandDetector
+
+# Patrones que indican que el usuario necesita informacion de internet
+INTERNET_PATTERNS = [
+    # Noticias
+    r"noticia|noticias|que\s+(?:esta|está)\s+pasando|que\s+(?:ha|hay)\s+pasado",
+    # Clima/tiempo
+    r"clima|(?:que|cómo)\s+(?:tal\s+)?(?:el\s+)?(?:tiempo|temperatura)|va\s+a\s+llover|pronostico",
+    # Precios/cotizaciones
+    r"precio\s+de|cotizacion|(?:cuanto|cuánto)\s+(?:vale|cuesta)|dolar|bitcoin|bolsa",
+    # Resultados deportivos
+    r"resultado|marcador|(?:quien|quién)\s+(?:gano|ganó)|partido\s+de|score",
+    # Eventos actuales
+    r"hoy\s+(?:en|que)|esta\s+semana|actualmente|actual|reciente|ultimo|última|últim",
+    # Búsqueda explícita de info
+    r"(?:busca|buscame|dime)\s+(?:informacion|info)\s+(?:sobre|de|del)",
+    r"(?:que|qué)\s+(?:sabes|hay)\s+(?:sobre|de|del|acerca)",
+    r"(?:investiga|averigua|encuentra)\s+(?:sobre|de|del|acerca|info)",
+    # Personas/eventos/lugares actuales
+    r"(?:quien|quién)\s+es\s+(?:el|la)\s+(?:presidente|primer\s+ministro)",
+    r"(?:cuando|cuándo)\s+(?:es|sera|será)\s+(?:el|la|los|las)",
+]
+
+_internet_re = re.compile("|".join(INTERNET_PATTERNS), re.IGNORECASE)
+
+
+def needs_internet(text: str) -> bool:
+    """Detecta si la pregunta necesita informacion actualizada de internet."""
+    return bool(_internet_re.search(text))
 
 console = Console()
 
@@ -200,7 +230,37 @@ def main():
                 console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
                 continue
 
-            # SLOW PATH: Enviar a la IA
+            # INTERNET PATH: Si necesita info actual, buscar en DuckDuckGo + resumir con IA
+            if needs_internet(user_input):
+                memory.add_message("user", user_input)
+
+                console.print("")
+                with Live(
+                    Spinner("dots", text="[cyan] Buscando en internet...[/cyan]", style="cyan"),
+                    console=console,
+                    transient=True,
+                ):
+                    response = provider_manager.search_and_answer(user_input)
+
+                if response:
+                    clean_response, _ = tool_executor.process_response(response)
+                    memory.add_message("assistant", clean_response)
+                    display_response(clean_response, "internet")
+
+                    if mic_available:
+                        stt.pause()
+                    voice_engine.speak(clean_response)
+                    if mic_available:
+                        stt.resume()
+
+                    console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
+                    continue
+                else:
+                    # No se pudo buscar, avisar y dejar que Ollama intente solo
+                    memory.messages.pop()
+                    console.print(f"\n  [yellow]No pude buscar en internet. Intentare responder con lo que se.[/yellow]")
+
+            # SLOW PATH: Enviar a la IA (Ollama)
             memory.add_message("user", user_input)
 
             console.print("")

@@ -1,6 +1,8 @@
 import re
+import os
 import random
 from . import pc_control
+from .code_executor import execute_code
 
 
 class FastCommandDetector:
@@ -108,6 +110,22 @@ class FastCommandDetector:
         (r"(?:haz\s+)?click\s+(?:en\s+)?(?:el\s+)?(.+)", "_handle_click_info"),
         # Presionar teclas
         (r"(?:presiona|pulsa|press)\s+(.+)", "_handle_press_key"),
+        # Crear documentos Word
+        (r"(?:crea|crear|hazme|haz|genera|generar|redacta|redactar|escribir|escribe)\s+(?:un\s+)?(?:documento|archivo|doc)\s+(?:en\s+)?(?:word|docx)(?:\s+(?:que\s+(?:diga|tenga|contenga|se\s+llame)|con|llamado|titulado|sobre|de|del)\s+(.+))?", "_handle_create_word"),
+        (r"(?:crea|crear|hazme|haz|genera|generar)\s+(?:un\s+)?word(?:\s+(?:que\s+(?:diga|tenga|contenga)|con|llamado|titulado|sobre|de|del)\s+(.+))?", "_handle_create_word"),
+        # Crear Excel
+        (r"(?:crea|crear|hazme|haz|genera|generar)\s+(?:un\s+)?(?:documento|archivo)?\s*(?:en\s+)?(?:excel|xlsx)(?:\s+(?:que\s+(?:diga|tenga|contenga)|con|llamado|titulado|sobre|de|del)\s+(.+))?", "_handle_create_excel"),
+        # Crear archivo de texto
+        (r"(?:crea|crear|hazme|haz|genera|generar)\s+(?:un\s+)?(?:archivo\s+de\s+texto|txt|nota)(?:\s+(?:que\s+(?:diga|tenga|contenga)|con|llamado|titulado|sobre|de|del)\s+(.+))?", "_handle_create_txt"),
+        # Listar archivos
+        (r"(?:lista|listar|muestrame|muestra|dime)\s+(?:los\s+)?(?:archivos|carpetas|contenido)\s+(?:de\s+)?(?:mi\s+)?(?:el\s+)?(escritorio|desktop|descargas|downloads|documentos|documents|.+)", "_handle_list_files"),
+        # Espacio en disco
+        (r"(?:cuanto|cuánto)\s+(?:espacio|almacenamiento).+(?:disco\s+)([a-zA-Z])", "_handle_disk_space"),
+        (r"(?:espacio|almacenamiento).+(?:disco\s+)([a-zA-Z])", "_handle_disk_space"),
+        (r"(?:cuanto|cuánto)\s+(?:espacio|almacenamiento)", "_handle_disk_space"),
+        (r"(?:espacio|almacenamiento)\s+(?:libre|disponible)", "_handle_disk_space"),
+        # Info del sistema
+        (r"(?:info|informacion|datos)\s+(?:del\s+)?(?:sistema|pc|computador|equipo)", "_handle_system_info"),
         # CATCH-ALL: "reproduce/pon X" que no matcheo nada -> busca en Spotify
         (r"(?:pon|reproduce|reproducir|play|ponme|coloca)\s+(.+)", "_handle_spotify_catch_all"),
     ]
@@ -395,3 +413,155 @@ class FastCommandDetector:
             except ImportError:
                 return None
         return None
+
+    # =========================================================================
+    # Creacion de documentos y archivos
+    # =========================================================================
+
+    def _handle_create_word(self, match) -> str:
+        content = match.group(1).strip().rstrip(".") if match.group(1) else ""
+        desktop = os.path.expanduser("~\\Desktop").replace("\\", "\\\\")
+
+        if content:
+            # Limpiar el contenido para usarlo como titulo y texto
+            safe_content = content.replace('"', '\\"').replace("'", "\\'")
+            filename = re.sub(r'[^\w\s-]', '', content[:40]).strip().replace(' ', '_') or "documento"
+        else:
+            safe_content = "Documento creado por Jarvis"
+            filename = "documento"
+
+        code = f'''import subprocess
+subprocess.run(["pip", "install", "python-docx"], capture_output=True)
+from docx import Document
+doc = Document()
+doc.add_heading("{safe_content[:80]}", level=1)
+doc.add_paragraph("{safe_content}")
+filepath = r"{desktop}\\{filename}.docx"
+doc.save(filepath)
+import os
+os.startfile(filepath)
+print(f"Documento creado: {{filepath}}")
+'''
+        result = execute_code(code)
+        if result["success"]:
+            return f"Listo, senor. Documento Word creado en su escritorio: {filename}.docx"
+        return f"No pude crear el documento: {result['message']}"
+
+    def _handle_create_excel(self, match) -> str:
+        content = match.group(1).strip().rstrip(".") if match.group(1) else ""
+        desktop = os.path.expanduser("~\\Desktop").replace("\\", "\\\\")
+
+        if content:
+            safe_content = content.replace('"', '\\"')
+            filename = re.sub(r'[^\w\s-]', '', content[:40]).strip().replace(' ', '_') or "hoja"
+        else:
+            safe_content = "Hoja de calculo"
+            filename = "hoja"
+
+        code = f'''import subprocess
+subprocess.run(["pip", "install", "openpyxl"], capture_output=True)
+from openpyxl import Workbook
+wb = Workbook()
+ws = wb.active
+ws.title = "{safe_content[:30]}"
+ws["A1"] = "{safe_content}"
+filepath = r"{desktop}\\{filename}.xlsx"
+wb.save(filepath)
+import os
+os.startfile(filepath)
+print(f"Excel creado: {{filepath}}")
+'''
+        result = execute_code(code)
+        if result["success"]:
+            return f"Listo, senor. Excel creado en su escritorio: {filename}.xlsx"
+        return f"No pude crear el Excel: {result['message']}"
+
+    def _handle_create_txt(self, match) -> str:
+        content = match.group(1).strip().rstrip(".") if match.group(1) else ""
+        desktop = os.path.expanduser("~\\Desktop").replace("\\", "\\\\")
+
+        if content:
+            safe_content = content.replace('"', '\\"')
+            filename = re.sub(r'[^\w\s-]', '', content[:40]).strip().replace(' ', '_') or "nota"
+        else:
+            safe_content = "Nota creada por Jarvis"
+            filename = "nota"
+
+        code = f'''filepath = r"{desktop}\\{filename}.txt"
+with open(filepath, "w", encoding="utf-8") as f:
+    f.write("{safe_content}")
+import os
+os.startfile(filepath)
+print(f"Archivo creado: {{filepath}}")
+'''
+        result = execute_code(code)
+        if result["success"]:
+            return f"Listo, senor. Archivo de texto creado en su escritorio: {filename}.txt"
+        return f"No pude crear el archivo: {result['message']}"
+
+    # =========================================================================
+    # Info del sistema y archivos
+    # =========================================================================
+
+    def _handle_list_files(self, match) -> str:
+        folder = match.group(1).strip().lower().rstrip(".")
+        folder_map = {
+            "escritorio": "Desktop",
+            "desktop": "Desktop",
+            "descargas": "Downloads",
+            "downloads": "Downloads",
+            "documentos": "Documents",
+            "documents": "Documents",
+        }
+        folder_name = folder_map.get(folder, folder)
+
+        # Si es una ruta conocida, usar expanduser
+        if folder_name in ("Desktop", "Downloads", "Documents"):
+            path = os.path.expanduser(f"~\\{folder_name}")
+        else:
+            path = folder_name
+
+        try:
+            if not os.path.exists(path):
+                return f"No encontre la carpeta '{folder}'."
+            items = os.listdir(path)
+            if not items:
+                return f"La carpeta {folder} esta vacia."
+            listing = "\n".join(f"  - {item}" for item in items[:30])
+            total = len(items)
+            extra = f"\n  ... y {total - 30} mas." if total > 30 else ""
+            return f"Archivos en {folder} ({total}):\n{listing}{extra}"
+        except Exception as e:
+            return f"Error listando archivos: {e}"
+
+    def _handle_disk_space(self, match) -> str:
+        try:
+            drive = match.group(1).strip().upper() if match.lastindex and match.group(1) else "C"
+        except (IndexError, AttributeError):
+            drive = "C"
+        if not drive.endswith(":"):
+            drive += ":"
+        try:
+            import shutil
+            total, used, free = shutil.disk_usage(f"{drive}/")
+            total_gb = total // (1024 ** 3)
+            free_gb = free // (1024 ** 3)
+            used_gb = used // (1024 ** 3)
+            pct = round(used / total * 100, 1)
+            return f"Disco {drive} tiene {free_gb} GB libres de {total_gb} GB totales. Usado: {used_gb} GB ({pct}%)."
+        except Exception as e:
+            return f"No pude obtener info del disco {drive}: {e}"
+
+    def _handle_system_info(self, match) -> str:
+        result = pc_control.get_system_info()
+        if result["success"]:
+            data = result["data"]
+            return (
+                f"Info del sistema:\n"
+                f"  - OS: {data['os']}\n"
+                f"  - Version: {data['version']}\n"
+                f"  - Procesador: {data['processor']}\n"
+                f"  - Usuario: {data['user']}\n"
+                f"  - PC: {data['pc_name']}"
+            )
+        return "No pude obtener la info del sistema."

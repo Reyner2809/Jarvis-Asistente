@@ -39,3 +39,28 @@ class GeminiProvider(AIProvider):
         )
 
         return response.text
+
+    def search_and_answer(self, question: str) -> str:
+        """Usa Gemini con Google Search grounding para responder con info actual."""
+        from google.genai import types
+
+        client = self._get_client()
+
+        system = (
+            f"Eres {Config.ASSISTANT_NAME}, asistente IA personal. "
+            "Responde en espanol, se conciso (2-4 frases max). "
+            "Usa la informacion de Google Search para dar datos actualizados. "
+            "Llama al usuario 'senor' a veces."
+        )
+
+        response = client.models.generate_content(
+            model=Config.GEMINI_MODEL,
+            contents=question,
+            config=types.GenerateContentConfig(
+                system_instruction=system,
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+                max_output_tokens=4096,
+            ),
+        )
+
+        return response.text
