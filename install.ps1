@@ -1,75 +1,54 @@
 # ============================================================================
 # JARVIS - Instalador automatico
-# Uso: irm https://raw.githubusercontent.com/Reyner2809/Jarvis-Asistente/main/install.ps1 | iex
 # ============================================================================
 
-try {
-
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$ErrorActionPreference = "Continue"
 
-function Write-Color($color, $text) {
-    Write-Host $text -ForegroundColor $color
-}
-
-function Write-Banner {
-    Write-Host ""
-    Write-Color Cyan "       JARVIS - Asistente de IA Personal"
-    Write-Color Cyan "       ================================="
-    Write-Host ""
-    Write-Color White "       Instalador automatico"
-    Write-Host ""
-}
-
-function Test-Cmd($name) {
-    $null -ne (Get-Command $name -ErrorAction SilentlyContinue)
-}
-
-# --- INICIO ---
 Clear-Host
-Write-Banner
-
-Write-Color White "  Bienvenido! Este script instalara JARVIS en tu PC."
-Write-Color Gray "  Solo necesitas seguir las instrucciones."
 Write-Host ""
-Write-Color Cyan "  =================================================="
+Write-Host "       JARVIS - Asistente de IA Personal" -ForegroundColor Cyan
+Write-Host "       =================================" -ForegroundColor Cyan
+Write-Host "       Instalador automatico" -ForegroundColor White
+Write-Host ""
+Write-Host "  ==================================================" -ForegroundColor Cyan
 Write-Host ""
 
 # --- Verificar Python ---
-Write-Color Yellow "  Verificando Python..."
-if (Test-Cmd "python") {
+Write-Host "  Verificando Python..." -ForegroundColor Yellow
+$pyCmd = Get-Command python -ErrorAction SilentlyContinue
+if ($pyCmd) {
     $pyVer = & python --version 2>&1
-    Write-Color Green "  OK: $pyVer detectado"
+    Write-Host "  OK: $pyVer" -ForegroundColor Green
 } else {
-    Write-Color Red "  ERROR: Python no esta instalado."
+    Write-Host "  Python no esta instalado." -ForegroundColor Red
     Write-Host ""
-    Write-Color White "  Para instalar Python:"
-    Write-Color Cyan "  1. Ve a https://www.python.org/downloads/"
-    Write-Color Cyan "  2. Descarga Python 3.10 o superior"
-    Write-Color Cyan "  3. IMPORTANTE: Marca la casilla 'Add Python to PATH'"
-    Write-Color Cyan "  4. Instala y vuelve a ejecutar este script"
+    Write-Host "  Para instalar Python:" -ForegroundColor White
+    Write-Host "  1. Ve a https://www.python.org/downloads/" -ForegroundColor Cyan
+    Write-Host "  2. Descarga Python 3.10 o superior" -ForegroundColor Cyan
+    Write-Host "  3. IMPORTANTE: Marca 'Add Python to PATH'" -ForegroundColor Cyan
+    Write-Host "  4. Instala y vuelve a ejecutar este script" -ForegroundColor Cyan
     Write-Host ""
     Start-Process "https://www.python.org/downloads/"
-    Write-Host ""
     Read-Host "  Presiona Enter para cerrar"
     return
 }
 
 # --- Verificar Git ---
-Write-Color Yellow "  Verificando Git..."
-if (Test-Cmd "git") {
-    Write-Color Green "  OK: Git detectado"
+Write-Host "  Verificando Git..." -ForegroundColor Yellow
+$gitCmd = Get-Command git -ErrorAction SilentlyContinue
+if ($gitCmd) {
+    Write-Host "  OK: Git detectado" -ForegroundColor Green
 } else {
-    Write-Color Yellow "  Git no esta instalado. Intentando instalar con winget..."
+    Write-Host "  Git no encontrado. Instalando con winget..." -ForegroundColor Yellow
     & winget install Git.Git --accept-source-agreements --accept-package-agreements 2>&1 | Out-Null
-    # Agregar al PATH de esta sesion
     $env:PATH += ";C:\Program Files\Git\cmd"
-    if (Test-Cmd "git") {
-        Write-Color Green "  OK: Git instalado"
+    $gitCmd2 = Get-Command git -ErrorAction SilentlyContinue
+    if ($gitCmd2) {
+        Write-Host "  OK: Git instalado" -ForegroundColor Green
     } else {
-        Write-Color Red "  ERROR: No pude instalar Git."
-        Write-Color White "  Descarga Git de: https://git-scm.com/download/win"
-        Write-Color Yellow "  Despues de instalar, ejecuta este script de nuevo."
-        Write-Host ""
+        Write-Host "  No pude instalar Git." -ForegroundColor Red
+        Write-Host "  Descarga de: https://git-scm.com/download/win" -ForegroundColor White
         Read-Host "  Presiona Enter para cerrar"
         return
     }
@@ -77,29 +56,28 @@ if (Test-Cmd "git") {
 
 # --- Clonar repositorio ---
 Write-Host ""
-Write-Color Cyan "  =================================================="
-Write-Color White "  Descargando JARVIS..."
-Write-Color Cyan "  =================================================="
+Write-Host "  ==================================================" -ForegroundColor Cyan
+Write-Host "  Descargando JARVIS..." -ForegroundColor White
+Write-Host "  ==================================================" -ForegroundColor Cyan
 Write-Host ""
 
-$installDir = "$env:USERPROFILE\Jarvis-Asistente"
+$installDir = Join-Path $env:USERPROFILE "Jarvis-Asistente"
 
 if (Test-Path $installDir) {
-    Write-Color Yellow "  Jarvis ya existe en $installDir"
+    Write-Host "  Jarvis ya existe en $installDir" -ForegroundColor Yellow
     $update = Read-Host "  Actualizar? (S/n)"
     if ($update -eq "" -or $update -match "^[sS]") {
         Set-Location $installDir
         & git pull origin main 2>&1 | Out-Null
-        Write-Color Green "  OK: Actualizado"
+        Write-Host "  OK: Actualizado" -ForegroundColor Green
     }
 } else {
-    Write-Color Gray "  Clonando repositorio..."
+    Write-Host "  Clonando repositorio..." -ForegroundColor Gray
     & git clone "https://github.com/Reyner2809/Jarvis-Asistente.git" "$installDir" 2>&1 | Out-Null
-    if (Test-Path "$installDir\main.py") {
-        Write-Color Green "  OK: Descargado en $installDir"
+    if (Test-Path (Join-Path $installDir "main.py")) {
+        Write-Host "  OK: Descargado en $installDir" -ForegroundColor Green
     } else {
-        Write-Color Red "  ERROR: No se pudo descargar. Verifica tu conexion a internet."
-        Write-Host ""
+        Write-Host "  Error descargando. Verifica tu internet." -ForegroundColor Red
         Read-Host "  Presiona Enter para cerrar"
         return
     }
@@ -107,17 +85,12 @@ if (Test-Path $installDir) {
 
 # --- Ejecutar wizard ---
 Write-Host ""
-Write-Color Cyan "  =================================================="
-Write-Color White "  Iniciando configuracion..."
-Write-Color Cyan "  =================================================="
+Write-Host "  ==================================================" -ForegroundColor Cyan
+Write-Host "  Iniciando configuracion..." -ForegroundColor White
+Write-Host "  ==================================================" -ForegroundColor Cyan
 Write-Host ""
 
 Set-Location $installDir
 & python setup.py
 
-} catch {
-    Write-Host ""
-    Write-Color Red "  ERROR: $_"
-    Write-Host ""
-    Read-Host "  Presiona Enter para cerrar"
-}
+Read-Host "  Presiona Enter para cerrar"
