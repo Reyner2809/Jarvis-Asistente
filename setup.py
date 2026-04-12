@@ -224,18 +224,75 @@ def _setup_ollama(config):
         print_warn("Ollama no esta instalado")
         print()
         print(f"  {C.BOLD}Ollama es el servidor de IA local. Sin el, Jarvis no puede pensar.{C.RESET}")
+        print(f"  {C.DIM}Instalando automaticamente...{C.RESET}")
         print()
-        print(f"  {C.WHITE}Para instalarlo:{C.RESET}")
-        print(f"  {C.CYAN}1.{C.RESET} Ve a {C.BOLD}https://ollama.ai{C.RESET}")
-        print(f"  {C.CYAN}2.{C.RESET} Descarga e instala para Windows")
-        print(f"  {C.CYAN}3.{C.RESET} Despues de instalar, vuelve aqui y presiona Enter")
-        print()
-        input(f"  {C.CYAN}>{C.RESET} Presiona Enter cuando hayas instalado Ollama...")
 
-        if not check_ollama():
-            print_err("Ollama sigue sin detectarse. Verifica la instalacion y ejecuta setup.py de nuevo.")
-            sys.exit(1)
-        print_ok("Ollama detectado")
+        # Intentar con winget
+        installed = False
+        if shutil.which("winget"):
+            print(f"  {C.DIM}Instalando Ollama con winget (puede tardar unos minutos)...{C.RESET}")
+            result = subprocess.run(
+                ["winget", "install", "Ollama.Ollama", "--accept-source-agreements", "--accept-package-agreements", "--silent"],
+                capture_output=True, text=True, timeout=300,
+            )
+            # Actualizar PATH
+            user_path = subprocess.run(["powershell", "-NoProfile", "-Command",
+                "[Environment]::GetEnvironmentVariable('Path','User')"],
+                capture_output=True, text=True).stdout.strip()
+            machine_path = subprocess.run(["powershell", "-NoProfile", "-Command",
+                "[Environment]::GetEnvironmentVariable('Path','Machine')"],
+                capture_output=True, text=True).stdout.strip()
+            os.environ["PATH"] = machine_path + ";" + user_path + ";" + os.environ.get("PATH", "")
+
+            if check_ollama():
+                installed = True
+                print_ok("Ollama instalado correctamente")
+
+        if not installed:
+            # Descarga directa
+            print(f"  {C.DIM}Descargando Ollama desde ollama.ai...{C.RESET}")
+            try:
+                import urllib.request
+                installer_path = os.path.join(os.environ.get("TEMP", "."), "OllamaSetup.exe")
+                urllib.request.urlretrieve("https://ollama.com/download/OllamaSetup.exe", installer_path)
+                print(f"  {C.DIM}Ejecutando instalador...{C.RESET}")
+                subprocess.run([installer_path, "/VERYSILENT", "/NORESTART"], timeout=120)
+                time.sleep(5)
+                # Actualizar PATH
+                user_path = subprocess.run(["powershell", "-NoProfile", "-Command",
+                    "[Environment]::GetEnvironmentVariable('Path','User')"],
+                    capture_output=True, text=True).stdout.strip()
+                os.environ["PATH"] = user_path + ";" + os.environ.get("PATH", "")
+
+                if check_ollama():
+                    installed = True
+                    print_ok("Ollama instalado correctamente")
+                try:
+                    os.unlink(installer_path)
+                except OSError:
+                    pass
+            except Exception as e:
+                print_err(f"Error descargando: {e}")
+
+        if not installed:
+            print()
+            print_err("No pude instalar Ollama automaticamente.")
+            print()
+            print(f"  {C.BOLD}Instalalo manualmente:{C.RESET}")
+            print(f"  {C.CYAN}1.{C.RESET} Ve a {C.BOLD}https://ollama.ai{C.RESET}")
+            print(f"  {C.CYAN}2.{C.RESET} Descarga e instala para Windows")
+            print(f"  {C.CYAN}3.{C.RESET} Despues de instalar, vuelve aqui y presiona Enter")
+            print()
+            try:
+                os.startfile("https://ollama.ai")
+            except Exception:
+                pass
+            input(f"  {C.CYAN}>{C.RESET} Presiona Enter cuando hayas instalado Ollama...")
+
+            if not check_ollama():
+                print_err("Ollama sigue sin detectarse. Ejecuta setup.py de nuevo despues de instalar.")
+                sys.exit(1)
+            print_ok("Ollama detectado")
 
     # Detectar GPU
     print()
@@ -267,34 +324,67 @@ def _setup_ollama(config):
         print_info("Funciona perfecto, las respuestas tardan ~5 segundos.")
         config["gpu"] = "cpu"
 
+    # Asegurarse de que Ollama esta corriendo
+    print()
+    print(f"  {C.DIM}Verificando que Ollama este corriendo...{C.RESET}")
+    try:
+        import urllib.request
+        urllib.request.urlopen("http://localhost:11434/api/tags", timeout=3)
+        print_ok("Ollama esta corriendo")
+    except Exception:
+        print(f"  {C.DIM}Iniciando Ollama...{C.RESET}")
+        if sys.platform == "win32":
+            ollama_app = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Ollama", "ollama app.exe")
+            if os.path.exists(ollama_app):
+                subprocess.Popen([ollama_app], creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                subprocess.Popen(["ollama", "serve"], creationflags=subprocess.CREATE_NO_WINDOW)
+        time.sleep(5)
+        try:
+            urllib.request.urlopen("http://localhost:11434/api/tags", timeout=3)
+            print_ok("Ollama iniciado")
+        except Exception:
+            print_warn("No pude iniciar Ollama. Puede que necesites abrirlo manualmente.")
+
     # Determinar modelos a descargar
     print()
     print(f"  {C.BOLD}Descargando modelos de IA...{C.RESET}")
-    print_info("Esto puede tardar unos minutos (se descargan una sola vez).")
+    print_info("Esto puede tardar varios minutos la primera vez (se descargan una sola vez).")
+    print_info("El progreso se muestra en la terminal.")
     print()
 
     # Modelo principal: llama3.2 (rapido para conversacion)
     if ollama_has_model("llama3.2"):
-        print_ok("llama3.2 ya descargado (conversacion)")
+        print_ok("llama3.2 ya descargado (modelo de conversacion)")
     else:
-        print(f"  {C.DIM}⏳ Descargando llama3.2 (~2GB)...{C.RESET}")
-        subprocess.run(["ollama", "pull", "llama3.2"], timeout=600)
-        print_ok("llama3.2 descargado")
+        print(f"  {C.CYAN}Descargando llama3.2 (~2GB) — modelo de conversacion...{C.RESET}")
+        print_info("Esto tarda unos minutos dependiendo de tu internet.")
+        result = subprocess.run(["ollama", "pull", "llama3.2"], timeout=600)
+        if result.returncode == 0 and ollama_has_model("llama3.2"):
+            print_ok("llama3.2 descargado")
+        else:
+            print_err("Error descargando llama3.2. Puedes intentar despues con: ollama pull llama3.2")
 
     # Modelo de vision: llava (opcional)
     print()
     print(f"  {C.BOLD}Modelo de vision (opcional):{C.RESET}")
     print_info("llava permite a Jarvis analizar fotos y capturas de pantalla.")
-    print_info("Tamaño: ~4.7GB")
+    print_info("Tamano: ~4.7GB")
+    print()
     if ollama_has_model("llava"):
         print_ok("llava ya descargado")
         config["vision"] = True
     else:
-        if ask_yes_no("¿Descargar llava para analisis de imagenes?", default=True):
-            print(f"  {C.DIM}⏳ Descargando llava (~4.7GB)...{C.RESET}")
-            subprocess.run(["ollama", "pull", "llava"], timeout=1200)
-            print_ok("llava descargado")
-            config["vision"] = True
+        if ask_yes_no("Descargar llava para analisis de imagenes? (4.7GB)", default=True):
+            print(f"  {C.CYAN}Descargando llava (~4.7GB)...{C.RESET}")
+            print_info("Esto puede tardar bastante. Se paciente.")
+            result = subprocess.run(["ollama", "pull", "llava"], timeout=1800)
+            if result.returncode == 0 and ollama_has_model("llava"):
+                print_ok("llava descargado")
+                config["vision"] = True
+            else:
+                print_warn("Error descargando llava. Puedes intentar despues con: ollama pull llava")
+                config["vision"] = False
         else:
             config["vision"] = False
             print_info("Omitido. Puedes descargarlo despues con: ollama pull llava")
@@ -387,16 +477,26 @@ def step_dependencies(config):
     if check_ffmpeg():
         print_ok("FFmpeg ya instalado")
     else:
-        print_warn("FFmpeg no encontrado")
-        print_info("FFmpeg es necesario para voz en Telegram y reproduccion de audio.")
+        print(f"  {C.DIM}Instalando FFmpeg (necesario para audio y voz)...{C.RESET}")
+        ffmpeg_installed = False
 
-        if check_scoop():
-            if ask_yes_no("¿Instalar FFmpeg con scoop?", default=True):
-                run_cmd("scoop install ffmpeg", "Instalando FFmpeg", timeout=120)
+        # Intentar con winget
+        if shutil.which("winget"):
+            if run_cmd("winget install Gyan.FFmpeg --accept-source-agreements --accept-package-agreements --silent",
+                       "Instalando FFmpeg con winget", timeout=180):
+                ffmpeg_installed = True
+
+        # Intentar con scoop
+        if not ffmpeg_installed and check_scoop():
+            if run_cmd("scoop install ffmpeg", "Instalando FFmpeg con scoop", timeout=120):
+                ffmpeg_installed = True
+
+        if ffmpeg_installed or check_ffmpeg():
+            print_ok("FFmpeg instalado")
         else:
-            print_info("Para instalar FFmpeg:")
-            print_info("  Opcion 1: Instala scoop (scoop.sh) y luego: scoop install ffmpeg")
-            print_info("  Opcion 2: Descarga de https://ffmpeg.org/download.html")
+            print_warn("No pude instalar FFmpeg automaticamente.")
+            print_info("Jarvis funcionara pero sin soporte de audio en Telegram.")
+            print_info("Para instalar despues: winget install Gyan.FFmpeg")
 
 
 def step_autostart(config):
