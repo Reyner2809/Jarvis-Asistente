@@ -47,64 +47,38 @@ class FastCommandDetector:
     }
 
     # Patrones de comandos rapidos
+    # FAST COMMANDS: Solo patrones 100% inequivocos e instantaneos.
+    # Todo lo ambiguo (pon X, reproduce X, busca X) va al Intent Router
+    # que entiende contexto (YouTube vs Spotify vs Google, etc.)
     PATTERNS = [
-        # Spotify especifico (ANTES de abrir/buscar para que tenga prioridad)
-        # Me gusta / favoritos / playlist favoritos
-        (r"(?:pon|reproduce|reproducir|play).+(?:me gusta|liked|favorit|mis gustos|mis favorit)", "_handle_spotify_liked"),
-        (r"(?:pon|reproduce|reproducir|play).+(?:playlist).+(?:favorit|me gusta)", "_handle_spotify_liked"),
-        # Buscar en spotify: "busca en spotify la cancion llamada X"
-        (r"(?:busca|buscar|buscame)\s+en\s+spotify\s+(?:la\s+)?(?:cancion|song|track)\s+(?:llamada?\s+|que\s+se\s+llama\s+)?(.+)", "_handle_spotify_search"),
-        (r"(?:busca|buscar|buscame)\s+en\s+spotify\s+(?:el\s+)?(?:album|disco)\s+(?:llamado?\s+)?(.+)", "_handle_spotify_search"),
+        # Spotify EXPLICITO (solo cuando menciona "spotify" textualmente)
+        (r"(?:pon|reproduce|reproducir|play|busca|coloca|ponme).+(?:me gusta|liked|favorit|mis gustos).*(?:en\s+)?spotify", "_handle_spotify_liked"),
         (r"(?:busca|buscar|buscame)\s+en\s+spotify\s+(.+)", "_handle_spotify_search"),
-        # "busca la cancion X en spotify"
-        (r"(?:busca|buscar|buscame)\s+(?:la\s+)?(?:cancion|song|track)\s+(?:llamada?\s+|que\s+se\s+llama\s+)?(.+?)\s+en\s+spotify", "_handle_spotify_search"),
-        (r"(?:busca|buscar|buscame)\s+(.+?)\s+en\s+spotify", "_handle_spotify_search"),
-        # Reproducir algo en spotify: "pon X en spotify"
-        (r"(?:pon|reproduce|reproducir|play|coloca|ponme)\s+(?:la\s+)?(?:cancion|song|track)\s+(?:llamada?\s+|que\s+se\s+llama\s+)?(.+?)\s+en\s+spotify", "_handle_spotify_search"),
-        (r"(?:pon|reproduce|reproducir|play|coloca|ponme)\s+(?:el\s+)?(?:album|disco)\s+(?:llamado?\s+)?(.+?)\s+en\s+spotify", "_handle_spotify_search"),
-        (r"(?:pon|reproduce|reproducir|play|coloca|ponme)\s+(.+?)\s+en\s+spotify", "_handle_spotify_search"),
-        # "en spotify pon/busca X"
+        (r"(?:pon|reproduce|play|coloca|ponme)\s+(.+?)\s+en\s+spotify", "_handle_spotify_search"),
         (r"en\s+spotify\s+(?:pon|reproduce|busca|play)\s+(.+)", "_handle_spotify_search"),
-        # "spotify pon/busca X"
         (r"spotify\s+(?:pon|reproduce|busca|play)\s+(.+)", "_handle_spotify_search"),
-        # "pon la cancion X" (sin mencionar spotify, asume spotify)
-        (r"(?:pon|reproduce|reproducir|play|ponme)\s+(?:la\s+)?(?:cancion|song|track)\s+(?:llamada?\s+|que\s+se\s+llama\s+)?(.+)", "_handle_spotify_search"),
-        (r"(?:pon|reproduce|reproducir|play|ponme)\s+(?:el\s+)?(?:album|disco)\s+(?:llamado?\s+)?(.+)", "_handle_spotify_search"),
-        (r"(?:pon|reproduce|reproducir|play|ponme)\s+(?:musica|music|algo)\s+de\s+(.+)", "_handle_spotify_search"),
-        # Whatsapp: "manda un mensaje en whatsapp a <contacto> diciendo <msg>"
-        # Hay que ponerlo antes de "abre/abrir" para que capture primero.
-        (r"(?:mandale|enviale|mandame|envia(?:me)?|manda)(?:\s+un)?\s+(?:mensaje|msj|msg|text)\s+(?:en|por|via|a\s+traves\s+de)\s+whatsapp\s+a\s+(.+?)\s+(?:dic(?:i[eé]ndole|i[eé]ndola|iendo|i[eé]ndolo)|que\s+diga(?:le|la|me)?)\s+(.+)", "_handle_whatsapp_send"),
-        (r"(?:mandale|enviale|envia|manda)(?:\s+un)?\s+(?:mensaje|msj|msg|text)\s+(?:de\s+)?whatsapp\s+a\s+(.+?)\s+(?:dic(?:i[eé]ndole|i[eé]ndola|iendo|i[eé]ndolo)|que\s+diga(?:le|la|me)?)\s+(.+)", "_handle_whatsapp_send"),
-        (r"(?:mandale|enviale|mandame|envia|manda)(?:\s+un)?\s+whatsapp\s+a\s+(.+?)\s+(?:dic(?:i[eé]ndole|i[eé]ndola|iendo|i[eé]ndolo)|que\s+diga(?:le|la|me)?)\s+(.+)", "_handle_whatsapp_send"),
-        # Abrir aplicaciones (incluye 'ingresa a', 'entra a', 'accede a', 'metete en')
-        (r"(?:abre|abrir|abreme|ejecuta|lanza|inicia|open)\s+(.+)", "_handle_open"),
-        (r"(?:ingresa|entra|accede|metete|mete|ve)\s+(?:a|en|al)\s+(.+)", "_handle_open"),
-        # Cerrar aplicaciones
-        (r"(?:cierra|cerrar|cierrame|mata|close|kill)\s+(.+)", "_handle_close"),
-        # Buscar en web
-        (r"(?:busca|buscar|buscame|search|googlea)\s+(.+)", "_handle_search"),
-        # Media controls
-        (r"(?:pon|reproduce|play|reproducir)\s+(?:la\s+)?musica", "_handle_play"),
-        (r"(?:pausa|pausar|pause|para|detener|deten)\s+(?:la\s+)?(?:musica|cancion|reproduccion)?", "_handle_play"),
-        (r"(?:siguiente|next|salta|skip)\s+(?:cancion|track|tema)?", "_handle_next"),
-        (r"(?:anterior|previous|prev|atras)\s+(?:cancion|track|tema)?", "_handle_prev"),
-        # Volumen
+        # Media controls (inequivocos, no necesitan contexto)
+        (r"(?:pon|reproduce|play|reproducir)\s+(?:la\s+)?musica$", "_handle_play"),
+        (r"(?:pausa|pausar|pause|para|detener|deten|stop|detente)(?:\s+(?:la\s+)?(?:musica|cancion|reproduccion|todo))?$", "_handle_play"),
+        (r"(?:siguiente|next|salta|skip)(?:\s+(?:cancion|track|tema))?$", "_handle_next"),
+        (r"(?:anterior|previous|prev|atras)(?:\s+(?:cancion|track|tema))?$", "_handle_prev"),
+        # Volumen (inequivoco)
         (r"(?:sube|subir|subele|aumenta).+volumen.*?(\d+)?", "_handle_volume_up"),
         (r"(?:baja|bajar|bajale|reduce|disminuye).+volumen.*?(\d+)?", "_handle_volume_down"),
         (r"(?:volumen|volume)\s+(?:a|al|en)?\s*(\d+)", "_handle_volume_set"),
-        (r"(?:silencia|mute|mutea|silenciar)", "_handle_mute"),
-        # Sistema
+        (r"(?:silencia|mute|mutea|silenciar)$", "_handle_mute"),
+        # Hora (inequivoco)
         (r"(?:que\s+hora|hora\s+es|dime\s+la\s+hora|que\s+hora\s+es)", "_handle_time"),
+        # Captura de pantalla (inequivoco)
         (r"(?:captura|screenshot|pantallazo|captura\s+de\s+pantalla)", "_handle_screenshot"),
         # Grabar pantalla
         (r"(?:graba|grabar|record)\s+(?:los\s+)?(?:ultimos|últimos)\s+(\d+)\s+(?:segundos|seg|s)", "_handle_record"),
         (r"(?:graba|grabar|record)\s+(?:la\s+)?(?:pantalla|screen)(?:\s+(\d+)\s+(?:segundos|seg|s))?", "_handle_record"),
         (r"(?:graba|grabar|record)\s+(\d+)\s+(?:segundos|seg|s)", "_handle_record"),
-        # Bloquear PC
-        (r"(?:bloquea|bloquear|lock)\s+(?:el\s+|la\s+|mi\s+)?(?:pc|computador|equipo|computadora|ordenador|compu|laptop|portatil)", "_handle_lock"),
-        (r"(?:bloquea|bloquear|lock)\s+(?:la\s+|el\s+)?(?:pantalla|sesion|screen)", "_handle_lock"),
+        # Bloquear PC (inequivoco)
+        (r"(?:bloquea|bloquear|lock)\s+(?:el\s+|la\s+|mi\s+)?(?:pc|computador|equipo|computadora|ordenador|compu|laptop|portatil|pantalla|sesion|screen)", "_handle_lock"),
         (r"bloquea(?:lo|la|te)?$", "_handle_lock"),
-        # Apagar / reiniciar / suspender
+        # Apagar / reiniciar (inequivoco)
         (r"(?:apaga|apagar)\s+(?:el\s+)?(?:pc|computador|equipo|computadora|ordenador)", "_handle_shutdown"),
         (r"(?:apaga|apagar)(?:lo|te)?$", "_handle_shutdown"),
         (r"(?:reinicia|reiniciar|restart)\s+(?:el\s+)?(?:pc|computador|equipo|computadora|ordenador)", "_handle_restart"),
@@ -113,33 +87,8 @@ class FastCommandDetector:
         (r"(?:hiberna|hibernar|hibernate)\s+(?:el\s+)?(?:pc|computador|equipo|computadora|ordenador)", "_handle_hibernate"),
         (r"(?:cierra|cerrar)\s+(?:la\s+)?sesion", "_handle_logoff"),
         (r"(?:cancela|cancelar)\s+(?:el\s+)?(?:apagado|reinicio|shutdown|restart)", "_handle_cancel_shutdown"),
-        # Escribir texto
-        (r"(?:escribe|escribir|escribeme|teclea|tipea)\s+[\"'](.+?)[\"']", "_handle_type_text"),
-        (r"(?:escribe|escribir|escribeme|teclea|tipea)\s+(.+)", "_handle_type_text"),
-        # Click
-        (r"(?:haz\s+)?click\s+(?:en\s+)?(?:el\s+)?(.+)", "_handle_click_info"),
-        # Presionar teclas
-        (r"(?:presiona|pulsa|press)\s+(.+)", "_handle_press_key"),
-        # Crear documentos Word
-        (r"(?:crea|crear|hazme|haz|genera|generar|redacta|redactar|escribir|escribe)\s+(?:un\s+)?(?:documento|archivo|doc)\s+(?:en\s+)?(?:word|docx)(?:\s+(?:que\s+(?:diga|tenga|contenga|se\s+llame)|con|llamado|titulado|sobre|de|del)\s+(.+))?", "_handle_create_word"),
-        (r"(?:crea|crear|hazme|haz|genera|generar)\s+(?:un\s+)?word(?:\s+(?:que\s+(?:diga|tenga|contenga)|con|llamado|titulado|sobre|de|del)\s+(.+))?", "_handle_create_word"),
-        # Crear Excel
-        (r"(?:crea|crear|hazme|haz|genera|generar)\s+(?:un\s+)?(?:documento|archivo)?\s*(?:en\s+)?(?:excel|xlsx)(?:\s+(?:que\s+(?:diga|tenga|contenga)|con|llamado|titulado|sobre|de|del)\s+(.+))?", "_handle_create_excel"),
-        # Crear archivo de texto
-        (r"(?:crea|crear|hazme|haz|genera|generar)\s+(?:un\s+)?(?:archivo\s+de\s+texto|txt|nota)(?:\s+(?:que\s+(?:diga|tenga|contenga)|con|llamado|titulado|sobre|de|del)\s+(.+))?", "_handle_create_txt"),
-        # Listar archivos
-        (r"(?:lista|listar|muestrame|muestra|dime)\s+(?:los\s+)?(?:archivos|carpetas|contenido)\s+(?:de\s+)?(?:mi\s+)?(?:el\s+)?(escritorio|desktop|descargas|downloads|documentos|documents|.+)", "_handle_list_files"),
-        # Espacio en disco
-        (r"(?:cuanto|cuánto)\s+(?:espacio|almacenamiento).+(?:disco\s+)([a-zA-Z])", "_handle_disk_space"),
-        (r"(?:espacio|almacenamiento).+(?:disco\s+)([a-zA-Z])", "_handle_disk_space"),
-        (r"(?:cuanto|cuánto)\s+(?:espacio|almacenamiento)", "_handle_disk_space"),
-        (r"(?:espacio|almacenamiento)\s+(?:libre|disponible)", "_handle_disk_space"),
-        # Info del sistema
-        (r"(?:info|informacion|datos)\s+(?:del\s+)?(?:sistema|pc|computador|equipo)", "_handle_system_info"),
-        # Presentacion
+        # Presentacion (inequivoco)
         (r"(?:presentate|preséntate|quien\s+eres|quién\s+eres|como\s+te\s+llamas|cómo\s+te\s+llamas|que\s+eres|qué\s+eres|dime\s+quien\s+eres|tu\s+nombre)", "_handle_introduce"),
-        # CATCH-ALL: "reproduce/pon X" que no matcheo nada -> busca en Spotify
-        (r"(?:pon|reproduce|reproducir|play|ponme|coloca)\s+(.+)", "_handle_spotify_catch_all"),
     ]
 
     def __init__(self):

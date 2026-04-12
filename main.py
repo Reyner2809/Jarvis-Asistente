@@ -8,8 +8,11 @@ Uso: python main.py
 
 import sys
 import os
+import logging
 import threading
 import queue
+
+log = logging.getLogger("jarvis.main")
 
 # Agregar el directorio raiz al path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -25,10 +28,13 @@ import re
 from config import Config
 from ai_providers import ProviderManager
 from voice import VoiceEngine, SpeechToText
-from memory import ConversationMemory
+from memory import ConversationMemory, UserMemory
 from utils import CommandHandler
 from tools import ToolExecutor, FastCommandDetector
+from tools.intent_router import IntentRouter
 from telegram_io import TelegramIO
+from knowledge import KnowledgeManager
+from scheduler import TaskScheduler
 
 # Patrones que indican que el usuario necesita informacion de internet
 INTERNET_PATTERNS = [
@@ -61,6 +67,36 @@ def needs_internet(text: str) -> bool:
     return bool(_internet_re.search(text))
 
 console = Console()
+
+# Patrones que indican que el usuario pregunta SOBRE un documento cargado
+# (meta-query), no sobre su contenido especifico.
+_DOC_META_RE = re.compile(
+    r"(?:resum|resume|resumen|resumeme|resumelo|resumela|resumir)"
+    r"|(?:de\s+que\s+(?:trata|habla|va|se\s+trata))"
+    r"|(?:que\s+(?:dice|contiene|tiene|trae))\s+(?:el|ese|este|mi|lo|la)?\s*(?:documento|archivo|doc|pdf|texto|file)"
+    r"|(?:que\s+(?:dice|contiene))\s+(?:lo\s+que|eso)"
+    r"|(?:dime|explicame|cuentame)\s+(?:sobre|de|que\s+dice)\s+(?:el|ese|lo)"
+    r"|(?:analiza|analisis)\s+(?:del?|el|ese|este|mi|lo)?\s*(?:documento|archivo)"
+    r"|(?:lo\s+que\s+(?:te\s+)?(?:cargue|subi|envie|mande))",
+    re.IGNORECASE,
+)
+
+
+def _build_rag_context(user_input: str, knowledge) -> str | None:
+    """
+    Decide que contexto RAG inyectar segun la pregunta del usuario.
+    - Si es meta-query ('resumeme el documento') -> inyecta todo el documento.
+    - Si es content-query ('que riesgos hay?') -> busqueda semantica normal.
+    """
+    # Meta-query: inyectar contenido completo del documento mas reciente
+    if _DOC_META_RE.search(user_input):
+        full = knowledge.get_all_content()
+        if full:
+            return full
+
+    # Content-query: busqueda semantica
+    return knowledge.build_context(user_input, top_k=5)
+
 
 BANNER = r"""
        ██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗
@@ -111,6 +147,59 @@ def keyboard_input_thread(input_queue: queue.Queue, stop_event: threading.Event)
             break
 
 
+def _startup_greeting(user_memory, voice_engine, mic_available, stt, telegram_io):
+    """Saludo proactivo al iniciar Jarvis, estilo JARVIS de Iron Man."""
+    from datetime import datetime
+
+    now = datetime.now()
+    hour = now.hour
+
+    # Saludo segun hora
+    if hour < 12:
+        saludo = "Buenos dias"
+    elif hour < 18:
+        saludo = "Buenas tardes"
+    else:
+        saludo = "Buenas noches"
+
+    # Nombre del usuario (si lo recuerda)
+    user_name = ""
+    if user_memory and user_memory.count > 0:
+        for fact in user_memory.recall_all():
+            if "nombre" in fact["text"].lower():
+                parts = fact["text"].split("es ")
+                if len(parts) > 1:
+                    user_name = parts[-1].strip().rstrip(".")
+                    break
+
+    name_part = f", senor {user_name}" if user_name else ", senor"
+    date_str = now.strftime("%A %d de %B, %I:%M %p")
+
+    greeting = f"{saludo}{name_part}. Un gusto atenderle."
+    time_info = f"Son las {date_str}."
+
+    console.print(f"\n  [bold cyan]{Config.ASSISTANT_NAME}:[/bold cyan] {greeting}")
+    console.print(f"  [dim]{time_info}[/dim]")
+    console.print(f"  [dim]¿En que puedo ayudarle hoy?[/dim]")
+
+    # Hablar el saludo
+    if voice_engine and voice_engine.is_enabled:
+        if mic_available and stt:
+            stt.pause()
+        voice_engine.speak(f"{greeting} {time_info}")
+        if mic_available and stt:
+            stt.resume()
+
+    # Enviar saludo por Telegram
+    if telegram_io and telegram_io.is_available:
+        try:
+            for uid in telegram_io.allowed_users:
+                telegram_io.send_reply(uid, f"{greeting}\n{time_info}\n\n¿En que puedo ayudarle hoy?")
+                break
+        except Exception:
+            pass
+
+
 def main():
     display_banner()
     console.print("\n[bold cyan]Inicializando sistemas...[/bold cyan]")
@@ -128,9 +217,149 @@ def main():
 
     tool_executor = ToolExecutor()
     fast_cmd = FastCommandDetector()
+    intent_router = IntentRouter()
+
+    # Pre-calentar el modelo de Ollama en background para que la primera
+    # interaccion no tenga 15s de delay por cargar el modelo en RAM.
+    def _warmup():
+        try:
+            intent_router.classify("hola")
+        except Exception:
+            pass
+    threading.Thread(target=_warmup, daemon=True).start()
     memory = ConversationMemory()
-    cmd_handler = CommandHandler(provider_manager, voice_engine, memory, stt)
+    user_memory = UserMemory()
+    user_memory.initialize()
+    cmd_handler = CommandHandler(provider_manager, voice_engine, memory, stt, knowledge=None, user_memory=user_memory)
     system_prompt = Config.get_system_prompt()
+
+    # Base de conocimiento RAG (opcional — solo si chromadb esta instalado)
+    knowledge = KnowledgeManager()
+    rag_available = knowledge.initialize()
+    if rag_available:
+        console.print(f"  [cyan]Base de conocimiento:[/cyan] activa ({knowledge.total_chunks} fragmentos)")
+    else:
+        console.print("  [dim]  Base de conocimiento: no disponible (instala chromadb para RAG)[/dim]")
+    cmd_handler._knowledge = knowledge
+
+    # Inyectar funciones de RAG en el executor si esta disponible
+    if rag_available:
+        from tools.executor import TOOLS
+
+        def _knowledge_search_fn(query: str) -> dict:
+            hits = knowledge.query(query, top_k=5)
+            if not hits:
+                return {"success": True, "message": "No encontre informacion relevante en la base de conocimiento."}
+            lines = []
+            for h in hits:
+                lines.append(f"[{h['source']}] (relevancia {h['score']:.0%}): {h['text'][:300]}")
+            return {"success": True, "message": "\n".join(lines)}
+
+        def _knowledge_load_fn(file_path: str) -> dict:
+            result = knowledge.add_document(file_path)
+            return {"success": result["success"], "message": result["message"]}
+
+        TOOLS["knowledge_search"]["function"] = _knowledge_search_fn
+        TOOLS["knowledge_load"]["function"] = _knowledge_load_fn
+
+    # Inyectar funciones de memoria en el executor
+    def _remember_fn(fact: str, category: str = "general") -> dict:
+        user_memory.remember(fact, category)
+        return {"success": True, "message": f"Recordare: {fact}"}
+
+    def _recall_memory_fn(query: str) -> dict:
+        hits = user_memory.recall(query)
+        if hits:
+            lines = [h["text"] for h in hits]
+            return {"success": True, "message": "\n".join(lines)}
+        return {"success": True, "message": "No encontre recuerdos sobre eso."}
+
+    from tools.executor import TOOLS
+    TOOLS["remember"]["function"] = _remember_fn
+    TOOLS["recall_memory"]["function"] = _recall_memory_fn
+
+    # Inyectar funciones de scheduler
+    def _schedule_reminder_fn(message: str, time_description: str) -> dict:
+        # Canal de entrega: siempre Telegram si disponible
+        _channel = "console"
+        _chat_id = None
+        if telegram_active:
+            _channel = "telegram"
+            if source == "telegram" and chat_id is not None:
+                _chat_id = chat_id
+            else:
+                _allowed = telegram_io.allowed_users
+                if _allowed:
+                    _chat_id = next(iter(_allowed))
+
+        # 1) Intentar como recurrente ("todos los dias", "cada lunes", etc.)
+        run_at, repeat = scheduler.parse_recurring(time_description)
+        if run_at and repeat:
+            task_info = scheduler.add_task(message, run_at, _channel, _chat_id, repeat=repeat)
+            repeat_label = {
+                "daily": "todos los dias",
+                "weekly": f"semanalmente",
+                "hourly": "cada hora",
+                "every": f"cada {repeat.get('minutes', '?')} minutos",
+            }.get(repeat["type"], repeat["type"])
+            return {"success": True, "message": f"Recordatorio recurrente ({repeat_label}) programado. Proxima ejecucion: {task_info['run_at']}. Mensaje: '{message}'"}
+
+        # 2) Intentar como relativo ("en 30 minutos")
+        run_at = scheduler.parse_relative_time(time_description)
+        if run_at is None:
+            # 3) Intentar como absoluto ("a las 5pm")
+            run_at = scheduler.parse_absolute_time(time_description)
+        if run_at is None:
+            return {"success": False, "message": f"No entendi el tiempo '{time_description}'. Usa: 'en 30 minutos', 'a las 5pm', 'todos los dias a las 9am', 'cada lunes a las 8am'."}
+
+        task_info = scheduler.add_task(message, run_at, _channel, _chat_id)
+        return {"success": True, "message": f"Recordatorio programado para {task_info['run_at']}: '{message}'"}
+
+    def _list_reminders_fn() -> dict:
+        tasks = scheduler.list_tasks()
+        if not tasks:
+            return {"success": True, "message": "No hay recordatorios pendientes."}
+        lines = []
+        for t in tasks:
+            lines.append(f"- [{t['id']}] {t['run_at'][:16]} — {t['message']}")
+        return {"success": True, "message": "\n".join(lines)}
+
+    TOOLS["schedule_reminder"]["function"] = _schedule_reminder_fn
+    TOOLS["list_reminders"]["function"] = _list_reminders_fn
+
+    # Inyectar funcion de busqueda en internet (DuckDuckGo -> texto)
+    def _internet_search_fn(query: str) -> dict:
+        from tools.web_search import search_internet
+        results = search_internet(query)
+        if results:
+            return {"success": True, "message": results}
+        return {"success": False, "message": "No encontre resultados para esa busqueda."}
+
+    from tools.executor import TOOLS
+    TOOLS["internet_search"]["function"] = _internet_search_fn
+
+    # Inyectar funciones de vision en el executor
+    from tools.executor import TOOLS as _TOOLS
+    from tools import pc_control as _pc_control
+
+    def _analyze_image_fn(image_path: str, prompt: str = "") -> dict:
+        result = provider_manager.analyze_image(image_path, prompt)
+        if result:
+            return {"success": True, "message": result}
+        return {"success": False, "message": "No pude analizar la imagen. Verifica que el modelo soporta vision."}
+
+    def _analyze_screenshot_fn() -> dict:
+        ss_result = _pc_control.take_screenshot()
+        if not ss_result.get("success"):
+            return {"success": False, "message": "No pude capturar la pantalla."}
+        ss_path = ss_result["message"].replace("Captura guardada en ", "")
+        analysis = provider_manager.analyze_image(ss_path, "Describe en detalle en espanol lo que ves en esta captura de pantalla.")
+        if analysis:
+            return {"success": True, "message": analysis}
+        return {"success": False, "message": "Capture la pantalla pero no pude analizarla."}
+
+    _TOOLS["analyze_image"]["function"] = _analyze_image_fn
+    _TOOLS["analyze_screenshot"]["function"] = _analyze_screenshot_fn
 
     # Cola unificada para input (voz, teclado y telegram).
     # Formato: (source, text, chat_id)  -- chat_id es None salvo para Telegram.
@@ -151,10 +380,23 @@ def main():
 
     # Inicializar integracion con Telegram (opcional). Le pasamos el voice_engine
     # para poder responder con audio cuando el usuario envia un audio por Telegram.
-    telegram_io = TelegramIO(input_queue, voice_engine=voice_engine)
+    telegram_io = TelegramIO(input_queue, voice_engine=voice_engine, knowledge_manager=knowledge, provider_manager=provider_manager)
     telegram_active = telegram_io.initialize()
     if telegram_active:
         telegram_io.start()
+
+    # Scheduler de recordatorios
+    def _console_reminder(msg):
+        console.print(f"\n  [bold yellow]{msg}[/bold yellow]")
+        console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
+
+    scheduler = TaskScheduler(
+        telegram_io=telegram_io if telegram_active else None,
+        console_callback=_console_reminder,
+    )
+    scheduler.initialize()
+    scheduler.start()
+    cmd_handler._scheduler = scheduler
 
     console.print("[bold green]\n  Sistemas en linea. Listo para servir, senor.[/bold green]")
     console.print("[dim]  Control del PC activado. Puedo abrir apps, buscar en la web, y mas.[/dim]")
@@ -170,28 +412,29 @@ def main():
         else:
             console.print("[dim]  Telegram activo[/dim]")
 
+    # Saludo proactivo al iniciar
+    _startup_greeting(user_memory, voice_engine, mic_available, stt, telegram_io if telegram_active else None)
+
     console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
 
     # Helper para responder al usuario segun el origen del mensaje
     def reply(text: str, source: str, chat_id, *, header: str = "", as_voice: bool = False):
         """
         Envia la respuesta al canal correspondiente (consola+voz o Telegram).
-        as_voice: si True y source=='telegram', responde con mensaje de voz en
-        vez de texto. Ignorado para canales locales (siempre hablan si la voz
-        esta activa).
+        Telegram NUNCA activa la voz del PC — la respuesta va solo a Telegram.
         """
         if source == "telegram" and chat_id is not None:
             if as_voice:
                 telegram_io.send_voice_reply(chat_id, text)
             else:
                 telegram_io.send_reply(chat_id, text)
-        else:
-            display_response(text, header)
-            if mic_available:
-                stt.pause()
-            voice_engine.speak(text)
-            if mic_available:
-                stt.resume()
+            return
+        display_response(text, header)
+        if mic_available:
+            stt.pause()
+        voice_engine.speak(text)
+        if mic_available:
+            stt.resume()
 
     # Loop principal
     while not stop_event.is_set():
@@ -250,6 +493,9 @@ def main():
                 console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
                 continue
 
+            # Extraer hechos personales del input
+            user_memory.extract_facts(user_input)
+
             # Si el usuario escribio solo "Jarvis" por teclado, tratarlo como wake word.
             # Desde Telegram no tiene sentido (ya estas hablando con el bot), asi que se ignora.
             if SpeechToText.is_wake_word(user_input):
@@ -283,12 +529,45 @@ def main():
                 console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
                 continue
 
-            # FAST PATH: Intentar ejecutar comando rapido sin IA
+            # FAST PATH: Intentar ejecutar comando rapido sin IA (regex, instantaneo)
             handled, fast_response = fast_cmd.try_execute(user_input)
             if handled:
                 memory.add_message("user", user_input)
                 memory.add_message("assistant", fast_response)
                 reply(fast_response, source, chat_id, as_voice=is_voice_input)
+                if source != "telegram":
+                    console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
+                continue
+
+            # INTENT ROUTER: Si el regex no lo atrapo, la IA decide rapidamente
+            # si es una ACCION (tool) o una PREGUNTA. Solo lo usamos si el input
+            # parece un comando (corto, imperativo). Para preguntas largas o
+            # conversacionales, saltar directo al AI completo para no agregar 3s.
+            _looks_like_question = bool(re.match(
+                r'^(?:que|qué|como|cómo|cuando|cuándo|donde|dónde|por\s*que|porqué|'
+                r'cual|cuál|cuanto|cuánto|quien|quién|explicame|cuentame|dime\s+(?:un|algo)|'
+                r'sabes|puedes\s+(?:explicar|decir|contar))\b',
+                user_input.lower(),
+            ))
+            # Tareas compuestas ("busca X Y dime/crea/manda Z") necesitan el
+            # Agent Loop, no el Intent Router, porque requieren multiples pasos.
+            _is_compound_task = bool(re.search(
+                r'\by\s+(?:dime|crea|crealas|crealo|ponlas|ponlo|manda|mandame|mandale|'
+                r'enviale|envia|enviame|resume|resumelo|resumeme|guarda|guardalo|abre|analiza)\b',
+                user_input.lower(),
+            ))
+            intent = None
+            if not _looks_like_question and not _is_compound_task:
+                intent = intent_router.classify(user_input)
+            if intent is not None:
+                tool_name = intent["tool"]
+                params = intent["params"]
+                console.print(f"  [bold magenta]>[/bold magenta] {tool_name} {params}")
+                result = tool_executor._execute_tool(tool_name, params)
+                intent_response = result.get("message", "Hecho, senor.")
+                memory.add_message("user", user_input)
+                memory.add_message("assistant", intent_response)
+                reply(intent_response, source, chat_id, as_voice=is_voice_input)
                 if source != "telegram":
                     console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
                 continue
@@ -317,44 +596,96 @@ def main():
                     memory.messages.pop()
                     console.print(f"\n  [yellow]No pude buscar en internet. Intentare responder con lo que se.[/yellow]")
 
-            # SLOW PATH: Enviar a la IA
-            memory.add_message("user", user_input)
+            # AGENT PATH: Routing inteligente.
+            # - Preguntas / conversacion -> chat() rapido SIN tools
+            # - Tareas con acciones -> agent_chat() con function calling y loop
+            # Inyectar memoria + RAG en el mensaje del usuario (no en system
+            # prompt — Ollama lo ignora). Esto garantiza que la IA VEA los datos.
+            context_parts = []
 
-            console.print("")
-            with Live(
-                Spinner("dots", text="[cyan] Procesando...[/cyan]", style="cyan"),
-                console=console,
-                transient=True,
-            ):
-                try:
-                    response = provider_manager.chat(
-                        memory.get_context_messages(),
-                        system_prompt,
-                    )
-                except ConnectionError as e:
-                    console.print(f"[bold red]Error: {e}[/bold red]")
-                    memory.messages.pop()
-                    if source == "telegram":
-                        telegram_io.send_reply(chat_id, f"Error: {e}")
-                    else:
-                        console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
-                    continue
-                except Exception as e:
-                    console.print(f"[bold red]Error inesperado: {e}[/bold red]")
-                    memory.messages.pop()
-                    if source == "telegram":
-                        telegram_io.send_reply(chat_id, f"Error inesperado: {e}")
-                    else:
-                        console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
-                    continue
+            # Memoria del usuario (hechos personales)
+            mem_ctx = user_memory.build_context()
+            if mem_ctx:
+                context_parts.append(mem_ctx)
 
-            # Ejecutar herramientas si la IA las solicito
-            clean_response, tool_results = tool_executor.process_response(response)
+            # RAG (documentos cargados)
+            if rag_available and knowledge.total_chunks > 0:
+                rag_context = _build_rag_context(user_input, knowledge)
+                if rag_context:
+                    context_parts.append(rag_context)
+
+            if context_parts:
+                augmented_input = "\n\n".join(context_parts) + "\n\nPREGUNTA DEL USUARIO: " + user_input
+            else:
+                augmented_input = user_input
+
+            memory.add_message("user", augmented_input)
+
+            from tools.executor import get_tools_schema, execute_tool_call
+
+            def _on_tool_call(step, tool_name, args):
+                console.print(f"  [bold magenta]Paso {step}[/bold magenta] {tool_name}({args})")
+
+            try:
+                if _looks_like_question:
+                    # Conversacion: chat rapido sin tools (~5s)
+                    console.print("")
+                    with Live(
+                        Spinner("dots", text="[cyan] Pensando...[/cyan]", style="cyan"),
+                        console=console,
+                        transient=True,
+                    ):
+                        response = provider_manager.chat(
+                            memory.get_context_messages(),
+                            system_prompt,
+                        )
+                else:
+                    # Tarea con acciones: Agent Loop con tools (~5-15s)
+                    console.print("")
+                    with Live(
+                        Spinner("dots", text="[cyan] Pensando...[/cyan]", style="cyan"),
+                        console=console,
+                        transient=True,
+                    ):
+                        response = provider_manager.agent_chat(
+                            messages=memory.get_context_messages(),
+                            system_prompt=system_prompt,
+                            tools_schema=get_tools_schema(),
+                            execute_fn=execute_tool_call,
+                            max_steps=Config.MAX_AGENT_STEPS,
+                            on_tool_call=_on_tool_call,
+                        )
+
+            except ConnectionError as e:
+                console.print(f"\n[bold red]Error: {e}[/bold red]")
+                memory.messages.pop()
+                if source == "telegram":
+                    telegram_io.send_reply(chat_id, f"Error: {e}")
+                else:
+                    console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
+                continue
+            except Exception as e:
+                console.print(f"\n[bold red]Error inesperado: {e}[/bold red]")
+                memory.messages.pop()
+                if source == "telegram":
+                    telegram_io.send_reply(chat_id, f"Error inesperado: {e}")
+                else:
+                    console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
+                continue
+
+            clean_response = response
 
             memory.add_message("assistant", clean_response)
-            reply(clean_response, source, chat_id, header=provider_manager.current_provider_name, as_voice=is_voice_input)
 
-            if source != "telegram":
+            if source == "telegram":
+                reply(clean_response, source, chat_id, header=provider_manager.current_provider_name, as_voice=is_voice_input)
+            else:
+                display_response(clean_response, provider_manager.current_provider_name)
+                if mic_available:
+                    stt.pause()
+                voice_engine.speak(clean_response)
+                if mic_available:
+                    stt.resume()
                 console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
 
         except KeyboardInterrupt:
@@ -362,6 +693,7 @@ def main():
 
     # Cleanup
     stop_event.set()
+    scheduler.stop()
     if mic_available:
         stt.stop_listening()
     if telegram_active:

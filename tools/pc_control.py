@@ -668,15 +668,13 @@ def whatsapp_send_message(contact: str, message: str) -> dict:
     """Envia un mensaje de texto a un contacto usando WhatsApp Desktop.
 
     Flujo:
-      1. Abre WhatsApp si no esta corriendo.
-      2. Espera a que la ventana este lista y la enfoca.
-      3. Ctrl+N abre la busqueda de nuevo chat.
-      4. Escribe el nombre del contacto (via clipboard para soportar acentos).
-      5. Enter selecciona el primer resultado.
-      6. Escribe el mensaje (via clipboard) y envia con Enter.
+      1. Abre/enfoca WhatsApp.
+      2. Escape para ir a la pantalla principal (lista de chats).
+      3. Busca en la barra de busqueda (chats existentes + contactos nuevos).
+      4. Si encuentra un chat existente, lo abre. Si no, abre contacto nuevo.
+      5. Escribe el mensaje y envia con Enter.
 
-    Nota: es automatizacion de UI, asi que requiere que WhatsApp este logueado
-    y que el nombre del contacto coincida con el que muestra la lista.
+    Esto prioriza chats existentes sobre crear nuevos.
     """
     import time
     try:
@@ -692,28 +690,38 @@ def whatsapp_send_message(contact: str, message: str) -> dict:
         return {"success": False, "message": "Falta el mensaje"}
 
     try:
-        # 1) Abrir WhatsApp (find_and_open_app maneja UWP + Win32)
+        # 1) Abrir/enfocar WhatsApp
         open_result = find_and_open_app("whatsapp")
         if not open_result.get("success"):
             return {"success": False, "message": "No pude abrir WhatsApp. Verifica que este instalado."}
 
-        # 2) Dar tiempo a que cargue. WhatsApp Desktop suele tardar unos segundos
-        # la primera vez. Si ya estaba abierto, tambien dejamos un pequeno margen.
-        time.sleep(4)
+        time.sleep(3)
 
-        # 3) Ctrl+N abre nuevo chat (busqueda de contacto) en WhatsApp Desktop
-        pyautogui.hotkey('ctrl', 'n')
-        time.sleep(1.5)
+        # 2) Escape para volver a la pantalla principal (cierra chat abierto)
+        pyautogui.press('escape')
+        time.sleep(0.8)
+        pyautogui.press('escape')
+        time.sleep(0.8)
 
-        # 4) Escribir nombre del contacto usando clipboard (soporta acentos, ñ, etc.)
+        # 3) Buscar en la barra de busqueda principal.
+        # En WhatsApp Desktop, Ctrl+F en la vista principal busca chats/contactos.
+        # Tambien se puede hacer click en la barra de busqueda.
+        pyautogui.hotkey('ctrl', 'f')
+        time.sleep(1)
+
+        # 4) Limpiar busqueda anterior y escribir nombre del contacto
+        pyautogui.hotkey('ctrl', 'a')
+        time.sleep(0.3)
         _clipboard_type(contact)
-        time.sleep(1.8)
+        time.sleep(2)
 
-        # 5) Enter selecciona el primer resultado (lo abre)
+        # 5) Seleccionar primer resultado (chat existente o contacto)
+        pyautogui.press('down')
+        time.sleep(0.3)
         pyautogui.press('enter')
         time.sleep(1.2)
 
-        # 6) Escribir mensaje con clipboard y enviar
+        # 6) Escribir mensaje y enviar
         _clipboard_type(message)
         time.sleep(0.4)
         pyautogui.press('enter')

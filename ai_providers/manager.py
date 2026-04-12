@@ -46,7 +46,7 @@ class ProviderManager:
 
         return True
 
-    def chat(self, messages: list, system_prompt: str) -> str:
+    def chat(self, messages: list, system_prompt: str, stream_callback=None) -> str:
         last_error = None
 
         for provider_name in self._fallback_order:
@@ -61,6 +61,9 @@ class ProviderManager:
                     )
                     self._current = provider
 
+                # Solo Ollama soporta streaming por ahora
+                if stream_callback and hasattr(provider.chat, '__code__') and 'stream_callback' in provider.chat.__code__.co_varnames:
+                    return provider.chat(messages, system_prompt, stream_callback=stream_callback)
                 return provider.chat(messages, system_prompt)
 
             except Exception as e:
@@ -109,6 +112,47 @@ class ProviderManager:
                 last_error = e
                 continue
 
+        return None
+
+    def agent_chat(
+        self, messages, system_prompt, tools_schema,
+        execute_fn=None, max_steps=5, on_tool_call=None, stream_callback=None,
+    ) -> str:
+        """Agent Loop: LLM con function calling nativo y multi-paso."""
+        last_error = None
+        for provider_name in self._fallback_order:
+            provider = self._providers[provider_name]
+            if not provider.is_available():
+                continue
+            if not hasattr(provider, "agent_chat"):
+                continue
+            try:
+                if provider != self._current:
+                    console.print(f"  [yellow]Cambiando a {provider_name.upper()}...[/yellow]")
+                    self._current = provider
+                return provider.agent_chat(
+                    messages, system_prompt, tools_schema,
+                    execute_fn, max_steps, on_tool_call, stream_callback,
+                )
+            except Exception as e:
+                last_error = e
+                console.print(f"  [red]Error con {provider_name.upper()}: {e}[/red]")
+                continue
+        raise ConnectionError(f"Agent loop fallo en todos los proveedores: {last_error}")
+
+    def analyze_image(self, image_path: str, prompt: str = "") -> str | None:
+        """Analiza una imagen con el proveedor activo (requiere modelo multimodal)."""
+        for provider_name in self._fallback_order:
+            provider = self._providers[provider_name]
+            if not provider.is_available():
+                continue
+            if not hasattr(provider, "analyze_image"):
+                continue
+            try:
+                return provider.analyze_image(image_path, prompt)
+            except Exception as e:
+                console.print(f"  [red]Error analizando imagen con {provider_name.upper()}: {e}[/red]")
+                continue
         return None
 
     def switch_provider(self, provider_name: str) -> bool:

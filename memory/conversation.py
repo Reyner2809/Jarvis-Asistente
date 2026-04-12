@@ -5,7 +5,7 @@ from datetime import datetime
 
 MEMORY_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 HISTORY_FILE = os.path.join(MEMORY_DIR, "conversation_history.json")
-MAX_CONTEXT_MESSAGES = 50
+MAX_CONTEXT_MESSAGES = 20
 
 
 class ConversationMemory:

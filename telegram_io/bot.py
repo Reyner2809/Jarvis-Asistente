@@ -44,9 +44,11 @@ class TelegramIO:
         tg.stop()
     """
 
-    def __init__(self, input_queue: "queue.Queue", voice_engine=None):
+    def __init__(self, input_queue: "queue.Queue", voice_engine=None, knowledge_manager=None, provider_manager=None):
         self.input_queue = input_queue
         self.voice_engine = voice_engine
+        self.knowledge_manager = knowledge_manager
+        self.provider_manager = provider_manager
         self.token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
         self.allowed_users = {
             int(uid.strip())
@@ -288,6 +290,103 @@ class TelegramIO:
                 f"User ID: {user.id}\n"
                 f"Username: @{user.username or '(sin username)'}",
             )
+
+        @bot.message_handler(content_types=["photo"])
+        def on_photo(message):
+            if not self._is_authorized(message):
+                self._log_denied(message)
+                bot.reply_to(message, "Acceso denegado.")
+                return
+
+            if self.provider_manager is None:
+                bot.reply_to(message, "No hay proveedor de IA disponible para analizar imagenes.")
+                return
+
+            log.info("Foto user=%s", message.from_user.id)
+
+            # Telegram envia varias resoluciones, tomamos la mas grande
+            photo = message.photo[-1]
+            caption = (message.caption or "").strip()
+
+            try:
+                file_info = bot.get_file(photo.file_id)
+                file_bytes = bot.download_file(file_info.file_path)
+            except Exception as e:
+                bot.reply_to(message, f"No pude descargar la foto: {e}")
+                return
+
+            ext = Path(file_info.file_path).suffix or ".jpg"
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False, prefix="jarvis_photo_") as tmp:
+                tmp.write(file_bytes)
+                tmp_path = tmp.name
+
+            try:
+                prompt = caption if caption else ""
+                bot.reply_to(message, "Analizando imagen, senor...")
+
+                result = self.provider_manager.analyze_image(tmp_path, prompt)
+                if result:
+                    self.send_reply(message.chat.id, result)
+                else:
+                    bot.reply_to(message, "No pude analizar la imagen. Verifica que el modelo soporta vision (gemma4).")
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+        @bot.message_handler(content_types=["document"])
+        def on_document(message):
+            if not self._is_authorized(message):
+                self._log_denied(message)
+                bot.reply_to(message, "Acceso denegado.")
+                return
+
+            if self.knowledge_manager is None or not self.knowledge_manager.is_available:
+                bot.reply_to(
+                    message,
+                    "La base de conocimiento no esta disponible en este Jarvis. "
+                    "Instala chromadb en el servidor: pip install chromadb",
+                )
+                return
+
+            doc = message.document
+            file_name = doc.file_name or "documento"
+            log.info("Documento user=%s: %s (%d bytes)", message.from_user.id, file_name, doc.file_size or 0)
+
+            try:
+                file_info = bot.get_file(doc.file_id)
+                file_bytes = bot.download_file(file_info.file_path)
+            except Exception as e:
+                bot.reply_to(message, f"No pude descargar el archivo: {e}")
+                return
+
+            with tempfile.NamedTemporaryFile(
+                suffix=Path(file_name).suffix, delete=False, prefix="jarvis_doc_"
+            ) as tmp:
+                tmp.write(file_bytes)
+                tmp_path = tmp.name
+
+            try:
+                bot.reply_to(message, f"Procesando '{file_name}'...")
+                result = self.knowledge_manager.add_document(tmp_path)
+                # Renombrar source al nombre original
+                if result["success"] and Path(tmp_path).name != file_name:
+                    self.knowledge_manager._engine.remove_source(Path(tmp_path).name)
+                    from knowledge import document_loader
+                    chunks = document_loader.load_and_chunk(tmp_path)
+                    self.knowledge_manager._engine.add_chunks(chunks, source_name=file_name)
+                    result["message"] = f"'{file_name}' procesado: {len(chunks)} fragmentos almacenados."
+
+                if result["success"]:
+                    bot.reply_to(message, f"Listo, senor. {result['message']}")
+                else:
+                    bot.reply_to(message, f"No pude procesar el documento: {result['message']}")
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
         @bot.message_handler(content_types=["text"])
         def on_text(message):
