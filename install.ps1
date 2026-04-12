@@ -89,12 +89,19 @@ if (Test-Path $installDir) {
     $update = Read-Host "  ¿Actualizar? (S/n)"
     if ($update -eq "" -or $update -match "^[sS]") {
         Set-Location $installDir
-        git pull origin main 2>&1 | Out-Null
+        $env:GIT_REDIRECT_STDERR = '2>&1'
+        git pull origin main 2>$null
         Write-Color Green "  ✅ Actualizado"
     }
 } else {
-    git clone https://github.com/Reyner2809/Jarvis-Asistente.git $installDir 2>&1 | Out-Null
-    Write-Color Green "  ✅ Descargado en $installDir"
+    $env:GIT_REDIRECT_STDERR = '2>&1'
+    git clone https://github.com/Reyner2809/Jarvis-Asistente.git $installDir 2>$null
+    if (Test-Path "$installDir\main.py") {
+        Write-Color Green "  ✅ Descargado en $installDir"
+    } else {
+        Write-Color Red "  ❌ Error descargando. Verifica tu conexion a internet."
+        exit 1
+    }
 }
 
 # --- Ejecutar wizard ---
