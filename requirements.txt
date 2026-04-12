@@ -10,3 +10,4 @@ SpeechRecognition>=3.10.0
 PyAudio>=0.2.14
 pyautogui>=0.9.54
 ddgs>=7.0.0
+pyTelegramBotAPI>=4.14.0

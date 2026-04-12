@@ -71,8 +71,14 @@ class FastCommandDetector:
         (r"(?:pon|reproduce|reproducir|play|ponme)\s+(?:la\s+)?(?:cancion|song|track)\s+(?:llamada?\s+|que\s+se\s+llama\s+)?(.+)", "_handle_spotify_search"),
         (r"(?:pon|reproduce|reproducir|play|ponme)\s+(?:el\s+)?(?:album|disco)\s+(?:llamado?\s+)?(.+)", "_handle_spotify_search"),
         (r"(?:pon|reproduce|reproducir|play|ponme)\s+(?:musica|music|algo)\s+de\s+(.+)", "_handle_spotify_search"),
-        # Abrir aplicaciones
+        # Whatsapp: "manda un mensaje en whatsapp a <contacto> diciendo <msg>"
+        # Hay que ponerlo antes de "abre/abrir" para que capture primero.
+        (r"(?:mandale|enviale|mandame|envia(?:me)?|manda)(?:\s+un)?\s+(?:mensaje|msj|msg|text)\s+(?:en|por|via|a\s+traves\s+de)\s+whatsapp\s+a\s+(.+?)\s+(?:dic(?:i[eé]ndole|i[eé]ndola|iendo|i[eé]ndolo)|que\s+diga(?:le|la|me)?)\s+(.+)", "_handle_whatsapp_send"),
+        (r"(?:mandale|enviale|envia|manda)(?:\s+un)?\s+(?:mensaje|msj|msg|text)\s+(?:de\s+)?whatsapp\s+a\s+(.+?)\s+(?:dic(?:i[eé]ndole|i[eé]ndola|iendo|i[eé]ndolo)|que\s+diga(?:le|la|me)?)\s+(.+)", "_handle_whatsapp_send"),
+        (r"(?:mandale|enviale|mandame|envia|manda)(?:\s+un)?\s+whatsapp\s+a\s+(.+?)\s+(?:dic(?:i[eé]ndole|i[eé]ndola|iendo|i[eé]ndolo)|que\s+diga(?:le|la|me)?)\s+(.+)", "_handle_whatsapp_send"),
+        # Abrir aplicaciones (incluye 'ingresa a', 'entra a', 'accede a', 'metete en')
         (r"(?:abre|abrir|abreme|ejecuta|lanza|inicia|open)\s+(.+)", "_handle_open"),
+        (r"(?:ingresa|entra|accede|metete|mete|ve)\s+(?:a|en|al)\s+(.+)", "_handle_open"),
         # Cerrar aplicaciones
         (r"(?:cierra|cerrar|cierrame|mata|close|kill)\s+(.+)", "_handle_close"),
         # Buscar en web
@@ -90,10 +96,14 @@ class FastCommandDetector:
         # Sistema
         (r"(?:que\s+hora|hora\s+es|dime\s+la\s+hora|que\s+hora\s+es)", "_handle_time"),
         (r"(?:captura|screenshot|pantallazo|captura\s+de\s+pantalla)", "_handle_screenshot"),
+        # Grabar pantalla
+        (r"(?:graba|grabar|record)\s+(?:los\s+)?(?:ultimos|últimos)\s+(\d+)\s+(?:segundos|seg|s)", "_handle_record"),
+        (r"(?:graba|grabar|record)\s+(?:la\s+)?(?:pantalla|screen)(?:\s+(\d+)\s+(?:segundos|seg|s))?", "_handle_record"),
+        (r"(?:graba|grabar|record)\s+(\d+)\s+(?:segundos|seg|s)", "_handle_record"),
         # Bloquear PC
-        (r"(?:bloquea|bloquear|lock)\s+(?:el\s+)?(?:pc|computador|equipo|computadora|ordenador)", "_handle_lock"),
-        (r"(?:bloquea|bloquear|lock)\s+(?:la\s+)?(?:pantalla|sesion|screen)", "_handle_lock"),
-        (r"bloquea(?:lo|te)?$", "_handle_lock"),
+        (r"(?:bloquea|bloquear|lock)\s+(?:el\s+|la\s+|mi\s+)?(?:pc|computador|equipo|computadora|ordenador|compu|laptop|portatil)", "_handle_lock"),
+        (r"(?:bloquea|bloquear|lock)\s+(?:la\s+|el\s+)?(?:pantalla|sesion|screen)", "_handle_lock"),
+        (r"bloquea(?:lo|la|te)?$", "_handle_lock"),
         # Apagar / reiniciar / suspender
         (r"(?:apaga|apagar)\s+(?:el\s+)?(?:pc|computador|equipo|computadora|ordenador)", "_handle_shutdown"),
         (r"(?:apaga|apagar)(?:lo|te)?$", "_handle_shutdown"),
@@ -126,6 +136,8 @@ class FastCommandDetector:
         (r"(?:espacio|almacenamiento)\s+(?:libre|disponible)", "_handle_disk_space"),
         # Info del sistema
         (r"(?:info|informacion|datos)\s+(?:del\s+)?(?:sistema|pc|computador|equipo)", "_handle_system_info"),
+        # Presentacion
+        (r"(?:presentate|preséntate|quien\s+eres|quién\s+eres|como\s+te\s+llamas|cómo\s+te\s+llamas|que\s+eres|qué\s+eres|dime\s+quien\s+eres|tu\s+nombre)", "_handle_introduce"),
         # CATCH-ALL: "reproduce/pon X" que no matcheo nada -> busca en Spotify
         (r"(?:pon|reproduce|reproducir|play|ponme|coloca)\s+(.+)", "_handle_spotify_catch_all"),
     ]
@@ -160,7 +172,9 @@ class FastCommandDetector:
         return False, ""
 
     def _handle_open(self, match) -> str | None:
-        target = match.group(1).strip().rstrip(".")
+        raw_target = match.group(1).strip().rstrip(".")
+        # Limpia articulos ('la calculadora' -> 'calculadora', 'a chrome' -> 'chrome')
+        target = pc_control._clean_app_name(raw_target) or raw_target
 
         # Detectar si es una web
         web_keywords = {
@@ -190,11 +204,24 @@ class FastCommandDetector:
                     return f"{self._random_response('open')} {key.capitalize()} abierto."
                 return f"No pude abrir {key}."
 
-        # Es una app
-        result = pc_control.open_application(target)
+        # Es una app - buscar en todo el sistema
+        result = pc_control.find_and_open_app(target)
         if result["success"]:
             return f"{self._random_response('open')} {target.capitalize()} abierto."
         return None  # Dejar que la IA maneje si no se pudo
+
+    def _handle_whatsapp_send(self, match) -> str | None:
+        contact = match.group(1).strip().rstrip(".,")
+        message = match.group(2).strip().rstrip(".")
+        # Quitar comillas accidentales
+        contact = contact.strip('"\'')
+        message = message.strip('"\'')
+        if not contact or not message:
+            return None
+        result = pc_control.whatsapp_send_message(contact, message)
+        if result["success"]:
+            return f"Listo, senor. Mensaje enviado a {contact} por WhatsApp."
+        return f"No pude enviar el mensaje: {result['message']}"
 
     def _handle_close(self, match) -> str:
         target = match.group(1).strip().rstrip(".")
@@ -346,6 +373,29 @@ class FastCommandDetector:
         if result["success"]:
             return f"{self._random_response('system')} {result['message']}"
         return "No pude tomar la captura."
+
+    def _handle_record(self, match) -> str:
+        seconds = 30
+        for g in match.groups():
+            if g and g.isdigit():
+                seconds = int(g)
+                break
+        result = pc_control.record_screen(seconds)
+        if result["success"]:
+            return f"{self._random_response('system')} {result['message']}"
+        return result["message"]
+
+    def _handle_introduce(self, match) -> str:
+        from config import Config
+        name = Config.ASSISTANT_NAME
+        intros = [
+            f"Soy {name}, su asistente de inteligencia artificial personal. Estoy aqui para lo que necesite, senor. Puedo abrir aplicaciones, buscar en internet, controlar su equipo y mucho mas.",
+            f"Me llamo {name}, senor. Soy su sistema de asistencia virtual inspirado en la IA de Tony Stark. Controlo su PC, busco informacion y ejecuto lo que me pida.",
+            f"{name} a su servicio. Soy una inteligencia artificial disenada para asistirle en todo: desde abrir Spotify hasta buscar noticias o bloquear su equipo. Pidame lo que sea.",
+            f"Mi nombre es {name}. Soy su mayordomo digital, senor. Gestiono aplicaciones, respondo preguntas, busco en la web y controlo su sistema. Estoy listo para servirle.",
+            f"Soy {name}, su IA personal. Piense en mi como su asistente de confianza: rapido, eficiente y siempre disponible. Digame en que puedo ayudarle.",
+        ]
+        return random.choice(intros)
 
     def _handle_lock(self, match) -> str:
         pc_control.lock_pc()

@@ -74,6 +74,24 @@ class VoiceEngine:
         elif self._pyttsx_engine:
             self._speak_pyttsx(text)
 
+    def synthesize_to_file(self, text: str, output_path: str) -> bool:
+        """
+        Genera audio TTS y lo guarda en output_path (mp3) sin reproducirlo.
+        Devuelve True si la sintesis funciono, False si no hay motor edge-tts.
+        Usado por integraciones externas como Telegram para enviar respuestas
+        habladas en lugar de solo texto.
+        """
+        if not self._use_edge_tts:
+            return False
+        try:
+            voice = EDGE_TTS_VOICES.get(self._voice_lang, "es-VE-SebastianNeural")
+            loop = self._get_event_loop()
+            loop.run_until_complete(self._generate_edge_audio(text, voice, output_path))
+            return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+        except Exception as e:
+            console.print(f"  [yellow]Error generando audio TTS: {e}[/yellow]")
+            return False
+
     def _speak_edge_tts(self, text: str):
         tmp_path = None
         try:

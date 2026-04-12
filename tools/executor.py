@@ -10,8 +10,8 @@ console = Console()
 # Mapeo de herramientas disponibles
 TOOLS = {
     "open_app": {
-        "function": pc_control.open_application,
-        "description": "Abre una app (spotify, chrome, notepad, word, excel, vscode, etc.)",
+        "function": pc_control.find_and_open_app,
+        "description": "Abre cualquier app instalada en el PC",
         "params": ["app_name"],
     },
     "close_app": {
@@ -49,6 +49,11 @@ TOOLS = {
         "description": "Captura de pantalla",
         "params": [],
     },
+    "record_screen": {
+        "function": pc_control.record_screen,
+        "description": "Graba la pantalla. 30 = ultimos 30 seg, otro valor = graba esos segundos",
+        "params": ["seconds"],
+    },
     "lock_pc": {
         "function": pc_control.lock_pc,
         "description": "Bloquea el PC",
@@ -83,6 +88,11 @@ TOOLS = {
         "function": pc_control.spotify_play,
         "description": "Reproduce en Spotify. uri: spotify:collection:tracks (me gusta)",
         "params": ["uri"],
+    },
+    "whatsapp_send": {
+        "function": pc_control.whatsapp_send_message,
+        "description": "Envia un mensaje de WhatsApp a un contacto por nombre (abre WhatsApp Desktop y automatiza la UI)",
+        "params": ["contact", "message"],
     },
     "type_text": {
         "function": automation.type_text,

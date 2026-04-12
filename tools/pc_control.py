@@ -73,9 +73,45 @@ KNOWN_APPS = {
 }
 
 
+_APP_NAME_NOISE_PREFIXES = (
+    "el programa de ", "el programa ", "la aplicacion de ", "la aplicacion ",
+    "la app de ", "la app ", "programa de ", "programa ", "aplicacion de ",
+    "aplicacion ", "app de ", "app ",
+)
+
+_APP_NAME_ARTICLES = (
+    "a la ", "a el ", "al ", "a ", "la ", "el ", "los ", "las ",
+    "un ", "una ", "unos ", "unas ", "mi ", "tu ", "su ",
+)
+
+
+def _clean_app_name(name: str) -> str:
+    """Normaliza el nombre de una app quitando articulos y ruido.
+
+    'la calculadora' -> 'calculadora'
+    'a chrome' -> 'chrome'
+    'el bloc de notas' -> 'bloc de notas'
+    'la app de spotify' -> 'spotify'
+    """
+    if not name:
+        return ""
+    n = name.lower().strip().rstrip(".,;:!?")
+    # Aplicar stripping en bucle hasta que no cambie (por si hay 'el programa de la ...')
+    changed = True
+    while changed and n:
+        changed = False
+        for prefix in _APP_NAME_NOISE_PREFIXES + _APP_NAME_ARTICLES:
+            if n.startswith(prefix):
+                n = n[len(prefix):].strip()
+                changed = True
+                break
+    return n or name.lower().strip()
+
+
 def open_application(app_name: str) -> dict:
     """Abre una aplicacion en el PC."""
-    app_key = app_name.lower().strip()
+    original_name = app_name
+    app_key = _clean_app_name(app_name)
 
     # Buscar en apps conocidas
     if app_key in KNOWN_APPS:
@@ -84,31 +120,29 @@ def open_application(app_name: str) -> dict:
             try:
                 if path.startswith("ms-"):
                     os.startfile(path)
-                    return {"success": True, "message": f"Se abrio {app_name}"}
+                    return {"success": True, "message": f"Se abrio {app_key}"}
 
-                if os.path.exists(path) or "\\" not in path:
-                    if app_key == "discord":
-                        subprocess.Popen([path, "--processStart", "Discord.exe"],
-                                        creationflags=subprocess.CREATE_NO_WINDOW)
-                    else:
-                        subprocess.Popen([path], creationflags=subprocess.CREATE_NO_WINDOW)
-                    return {"success": True, "message": f"Se abrio {app_name}"}
+                # Path absoluto: solo abrir si existe
+                if os.path.isabs(path):
+                    if os.path.exists(path):
+                        if app_key == "discord":
+                            subprocess.Popen([path, "--processStart", "Discord.exe"],
+                                            creationflags=subprocess.CREATE_NO_WINDOW)
+                        else:
+                            subprocess.Popen([path], creationflags=subprocess.CREATE_NO_WINDOW)
+                        return {"success": True, "message": f"Se abrio {app_key}"}
+                    continue
+
+                # Nombre simple tipo 'calc.exe' -> esta en PATH
+                try:
+                    subprocess.Popen([path], creationflags=subprocess.CREATE_NO_WINDOW)
+                    return {"success": True, "message": f"Se abrio {app_key}"}
+                except FileNotFoundError:
+                    continue
             except Exception:
                 continue
 
-    # Intentar abrir directamente con el nombre (por si esta en PATH)
-    try:
-        subprocess.Popen([app_key], creationflags=subprocess.CREATE_NO_WINDOW, shell=True)
-        return {"success": True, "message": f"Se abrio {app_name}"}
-    except Exception:
-        pass
-
-    # Intentar con start
-    try:
-        os.system(f'start "" "{app_key}"')
-        return {"success": True, "message": f"Se intento abrir {app_name}"}
-    except Exception:
-        return {"success": False, "message": f"No se pudo encontrar ni abrir {app_name}"}
+    return {"success": False, "message": f"No encontre '{original_name}' en las apps conocidas"}
 
 
 def close_application(app_name: str) -> dict:
@@ -268,6 +302,119 @@ $bitmap.Dispose()
             return {"success": False, "message": "No se pudo guardar la captura"}
     except Exception as e:
         return {"success": False, "message": f"Error: {e}"}
+
+
+def record_screen(seconds: int = 30) -> dict:
+    """Graba los ultimos N segundos usando Xbox Game Bar (Win+Alt+G) o inicia grabacion."""
+    try:
+        import pyautogui
+        import time
+
+        if seconds <= 0:
+            seconds = 30
+
+        # Metodo 1: Grabar los ultimos 30 segundos con Win+Alt+G
+        # Esto requiere que Xbox Game Bar este habilitado y la grabacion en segundo plano activa
+        if seconds == 30:
+            pyautogui.hotkey('win', 'alt', 'g')
+            time.sleep(1)
+            return {
+                "success": True,
+                "message": f"Se grabaron los ultimos 30 segundos. El video se guardo en la carpeta Videos\\Captures."
+            }
+
+        # Metodo 2: Para otros tiempos, iniciar grabacion, esperar, y detener
+        # Win+Alt+R inicia/detiene la grabacion
+        pyautogui.hotkey('win', 'alt', 'r')
+        time.sleep(seconds)
+        pyautogui.hotkey('win', 'alt', 'r')
+        return {
+            "success": True,
+            "message": f"Se grabo la pantalla por {seconds} segundos. El video se guardo en Videos\\Captures."
+        }
+
+    except Exception as e:
+        return {"success": False, "message": f"Error al grabar: {e}. Asegurese de tener Xbox Game Bar habilitado (Win+G)."}
+
+
+def find_and_open_app(app_name: str) -> dict:
+    """Busca una aplicacion en todo el sistema y la abre."""
+    original_name = app_name
+    app_key = _clean_app_name(app_name)
+    if not app_key:
+        return {"success": False, "message": f"No entendi que app abrir ('{original_name}')"}
+
+    # 1. Primero intentar con KNOWN_APPS
+    if app_key in KNOWN_APPS:
+        result = open_application(app_key)
+        if result["success"]:
+            return result
+
+    # 2. Buscar en accesos directos del Menu Inicio y Escritorio
+    search_dirs = [
+        os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs"),
+        r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs",
+        os.path.join(os.path.expanduser("~"), "Desktop"),
+        r"C:\Users\Public\Desktop",
+    ]
+
+    best_match = None
+    best_score = 0
+
+    for search_dir in search_dirs:
+        if not os.path.exists(search_dir):
+            continue
+        for root, dirs, files in os.walk(search_dir):
+            for f in files:
+                if f.lower().endswith(('.lnk', '.exe', '.url')):
+                    name_lower = f.lower().replace('.lnk', '').replace('.exe', '').replace('.url', '')
+                    # Match exacto
+                    if app_key == name_lower:
+                        best_match = os.path.join(root, f)
+                        best_score = 100
+                        break
+                    # Match parcial
+                    if app_key in name_lower or name_lower in app_key:
+                        score = len(app_key) / max(len(name_lower), 1) * 50
+                        if score > best_score:
+                            best_match = os.path.join(root, f)
+                            best_score = score
+            if best_score == 100:
+                break
+
+    if best_match:
+        try:
+            os.startfile(best_match)
+            return {"success": True, "message": f"Se abrio {app_key}"}
+        except Exception:
+            pass
+
+    # 3. Buscar con PowerShell en apps instaladas (UWP y Win32)
+    try:
+        ps_script = f'''
+$app = Get-StartApps | Where-Object {{ $_.Name -like "*{app_key}*" }} | Select-Object -First 1
+if ($app) {{
+    Start-Process "shell:AppsFolder\\$($app.AppID)"
+    Write-Output "OK:$($app.Name)"
+}} else {{
+    Write-Output "NOT_FOUND"
+}}
+'''
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_script],
+            capture_output=True, text=True, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        if result.stdout.strip().startswith("OK:"):
+            found_name = result.stdout.strip().split(":", 1)[1]
+            return {"success": True, "message": f"Se abrio {found_name}"}
+    except Exception:
+        pass
+
+    # Si llegamos aqui, no se encontro en ninguna parte.
+    # NO usamos 'start' shell como fallback porque muestra un dialogo de error
+    # de Windows ('no se encuentra el archivo') y siempre reporta exito falso.
+    return {"success": False, "message": f"No encontre '{original_name}' instalado en el sistema"}
 
 
 def lock_pc() -> dict:
@@ -515,3 +662,62 @@ def spotify_search_and_play(query: str) -> dict:
 def spotify_search(query: str) -> dict:
     """Wrapper que llama a spotify_search_and_play."""
     return spotify_search_and_play(query)
+
+
+def whatsapp_send_message(contact: str, message: str) -> dict:
+    """Envia un mensaje de texto a un contacto usando WhatsApp Desktop.
+
+    Flujo:
+      1. Abre WhatsApp si no esta corriendo.
+      2. Espera a que la ventana este lista y la enfoca.
+      3. Ctrl+N abre la busqueda de nuevo chat.
+      4. Escribe el nombre del contacto (via clipboard para soportar acentos).
+      5. Enter selecciona el primer resultado.
+      6. Escribe el mensaje (via clipboard) y envia con Enter.
+
+    Nota: es automatizacion de UI, asi que requiere que WhatsApp este logueado
+    y que el nombre del contacto coincida con el que muestra la lista.
+    """
+    import time
+    try:
+        import pyautogui
+    except ImportError:
+        return {"success": False, "message": "pyautogui no esta instalado"}
+
+    contact = (contact or "").strip()
+    message = (message or "").strip()
+    if not contact:
+        return {"success": False, "message": "Falta el nombre del contacto"}
+    if not message:
+        return {"success": False, "message": "Falta el mensaje"}
+
+    try:
+        # 1) Abrir WhatsApp (find_and_open_app maneja UWP + Win32)
+        open_result = find_and_open_app("whatsapp")
+        if not open_result.get("success"):
+            return {"success": False, "message": "No pude abrir WhatsApp. Verifica que este instalado."}
+
+        # 2) Dar tiempo a que cargue. WhatsApp Desktop suele tardar unos segundos
+        # la primera vez. Si ya estaba abierto, tambien dejamos un pequeno margen.
+        time.sleep(4)
+
+        # 3) Ctrl+N abre nuevo chat (busqueda de contacto) en WhatsApp Desktop
+        pyautogui.hotkey('ctrl', 'n')
+        time.sleep(1.5)
+
+        # 4) Escribir nombre del contacto usando clipboard (soporta acentos, ñ, etc.)
+        _clipboard_type(contact)
+        time.sleep(1.8)
+
+        # 5) Enter selecciona el primer resultado (lo abre)
+        pyautogui.press('enter')
+        time.sleep(1.2)
+
+        # 6) Escribir mensaje con clipboard y enviar
+        _clipboard_type(message)
+        time.sleep(0.4)
+        pyautogui.press('enter')
+
+        return {"success": True, "message": f"Mensaje enviado a {contact}"}
+    except Exception as e:
+        return {"success": False, "message": f"Error enviando WhatsApp: {e}"}
