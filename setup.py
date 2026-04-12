@@ -232,7 +232,7 @@ def _setup_ollama(config):
         if shutil.which("winget"):
             print(f"  {C.DIM}Instalando Ollama con winget (puede tardar unos minutos)...{C.RESET}")
             result = subprocess.run(
-                ["winget", "install", "Ollama.Ollama", "--accept-source-agreements", "--accept-package-agreements", "--silent"],
+                ["winget", "install", "Ollama.Ollama", "--accept-source-agreements", "--accept-package-agreements", "--silent", "--disable-interactivity"],
                 capture_output=True, text=True, timeout=300,
             )
             # Actualizar PATH
@@ -482,7 +482,7 @@ def step_dependencies(config):
 
         # Intentar con winget
         if shutil.which("winget"):
-            if run_cmd("winget install Gyan.FFmpeg --accept-source-agreements --accept-package-agreements --silent",
+            if run_cmd("winget install Gyan.FFmpeg --accept-source-agreements --accept-package-agreements --silent --disable-interactivity",
                        "Instalando FFmpeg con winget", timeout=180):
                 ffmpeg_installed = True
 

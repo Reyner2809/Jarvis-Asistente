@@ -44,7 +44,7 @@ if (-not $pythonOK) {
     $wingetOK = Get-Command winget -ErrorAction SilentlyContinue
     if ($wingetOK) {
         Write-Host "  Instalando Python con winget (esto puede tardar unos minutos)..." -ForegroundColor Cyan
-        & winget install Python.Python.3.11 --accept-source-agreements --accept-package-agreements --silent 2>&1 | Out-Null
+        & winget install Python.Python.3.11 --accept-source-agreements --accept-package-agreements --silent --disable-interactivity 2>&1 | Out-Null
 
         # Actualizar PATH de esta sesion
         $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -109,7 +109,7 @@ if ($gitCmd) {
     Write-Host "  OK: Git detectado" -ForegroundColor Green
 } else {
     Write-Host "  Git no encontrado. Instalando con winget..." -ForegroundColor Yellow
-    & winget install Git.Git --accept-source-agreements --accept-package-agreements 2>&1 | Out-Null
+    & winget install Git.Git --accept-source-agreements --accept-package-agreements --silent --disable-interactivity 2>&1 | Out-Null
     $env:PATH += ";C:\Program Files\Git\cmd"
     $gitCmd2 = Get-Command git -ErrorAction SilentlyContinue
     if ($gitCmd2) {
