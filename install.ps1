@@ -14,22 +14,28 @@ Write-Host ""
 Write-Host "  ==================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# --- Verificar Python ---
+# --- Verificar Python (real, no el alias de Microsoft Store) ---
 Write-Host "  Verificando Python..." -ForegroundColor Yellow
-$pyCmd = Get-Command python -ErrorAction SilentlyContinue
-if ($pyCmd) {
+$pythonOK = $false
+try {
     $pyVer = & python --version 2>&1
-    Write-Host "  OK: $pyVer" -ForegroundColor Green
-} else {
+    if ($pyVer -match "Python \d+\.\d+") {
+        Write-Host "  OK: $pyVer" -ForegroundColor Green
+        $pythonOK = $true
+    }
+} catch {}
+
+if (-not $pythonOK) {
     Write-Host "  Python no esta instalado." -ForegroundColor Red
     Write-Host ""
     Write-Host "  Para instalar Python:" -ForegroundColor White
     Write-Host "  1. Ve a https://www.python.org/downloads/" -ForegroundColor Cyan
     Write-Host "  2. Descarga Python 3.10 o superior" -ForegroundColor Cyan
-    Write-Host "  3. IMPORTANTE: Marca 'Add Python to PATH'" -ForegroundColor Cyan
-    Write-Host "  4. Instala y vuelve a ejecutar este script" -ForegroundColor Cyan
+    Write-Host "  3. MUY IMPORTANTE: Marca la casilla 'Add Python to PATH'" -ForegroundColor Yellow
+    Write-Host "  4. Instala, CIERRA esta ventana, y ejecuta este comando de nuevo" -ForegroundColor Cyan
     Write-Host ""
     Start-Process "https://www.python.org/downloads/"
+    Write-Host ""
     Read-Host "  Presiona Enter para cerrar"
     return
 }
