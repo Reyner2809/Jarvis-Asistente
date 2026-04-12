@@ -26,18 +26,80 @@ try {
 } catch {}
 
 if (-not $pythonOK) {
-    Write-Host "  Python no esta instalado." -ForegroundColor Red
+    Write-Host "  Python no esta instalado. Instalando automaticamente..." -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "  Para instalar Python:" -ForegroundColor White
-    Write-Host "  1. Ve a https://www.python.org/downloads/" -ForegroundColor Cyan
-    Write-Host "  2. Descarga Python 3.10 o superior" -ForegroundColor Cyan
-    Write-Host "  3. MUY IMPORTANTE: Marca la casilla 'Add Python to PATH'" -ForegroundColor Yellow
-    Write-Host "  4. Instala, CIERRA esta ventana, y ejecuta este comando de nuevo" -ForegroundColor Cyan
-    Write-Host ""
-    Start-Process "https://www.python.org/downloads/"
-    Write-Host ""
-    Read-Host "  Presiona Enter para cerrar"
-    return
+
+    # Desactivar alias de Microsoft Store que interfiere
+    try {
+        $aliases = @("python.exe", "python3.exe")
+        foreach ($a in $aliases) {
+            $aliasPath = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\$a"
+            if (Test-Path $aliasPath) {
+                Remove-Item $aliasPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+    } catch {}
+
+    # Intentar con winget primero
+    $wingetOK = Get-Command winget -ErrorAction SilentlyContinue
+    if ($wingetOK) {
+        Write-Host "  Instalando Python con winget (esto puede tardar unos minutos)..." -ForegroundColor Cyan
+        & winget install Python.Python.3.11 --accept-source-agreements --accept-package-agreements --silent 2>&1 | Out-Null
+
+        # Actualizar PATH de esta sesion
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+        $env:PATH = "$machinePath;$userPath"
+
+        # Verificar de nuevo
+        try {
+            $pyVer = & python --version 2>&1
+            if ($pyVer -match "Python \d+\.\d+") {
+                Write-Host "  OK: $pyVer instalado correctamente" -ForegroundColor Green
+                $pythonOK = $true
+            }
+        } catch {}
+    }
+
+    if (-not $pythonOK) {
+        # Intentar descarga directa
+        Write-Host "  Descargando Python desde python.org..." -ForegroundColor Cyan
+        $pyInstaller = Join-Path $env:TEMP "python_installer.exe"
+        try {
+            Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe" -OutFile $pyInstaller -UseBasicParsing
+            Write-Host "  Ejecutando instalador (esto tarda 1-2 minutos)..." -ForegroundColor Cyan
+            & $pyInstaller /quiet InstallAllUsers=0 PrependPath=1 Include_test=0 2>&1 | Out-Null
+            Start-Sleep -Seconds 5
+
+            # Actualizar PATH
+            $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+            $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+            $env:PATH = "$machinePath;$userPath"
+
+            try {
+                $pyVer = & python --version 2>&1
+                if ($pyVer -match "Python \d+\.\d+") {
+                    Write-Host "  OK: $pyVer instalado correctamente" -ForegroundColor Green
+                    $pythonOK = $true
+                }
+            } catch {}
+        } catch {
+            Write-Host "  Error descargando Python: $_" -ForegroundColor Red
+        }
+        Remove-Item $pyInstaller -Force -ErrorAction SilentlyContinue
+    }
+
+    if (-not $pythonOK) {
+        Write-Host ""
+        Write-Host "  No pude instalar Python automaticamente." -ForegroundColor Red
+        Write-Host "  Instala Python manualmente desde https://www.python.org/downloads/" -ForegroundColor White
+        Write-Host "  IMPORTANTE: Marca 'Add Python to PATH' en el instalador." -ForegroundColor Yellow
+        Write-Host "  Despues cierra esta ventana y ejecuta el comando de nuevo." -ForegroundColor Cyan
+        Write-Host ""
+        Start-Process "https://www.python.org/downloads/"
+        Read-Host "  Presiona Enter para cerrar"
+        return
+    }
 }
 
 # --- Verificar Git ---
