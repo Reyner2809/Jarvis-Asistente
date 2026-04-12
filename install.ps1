@@ -3,7 +3,7 @@
 # Uso: irm https://raw.githubusercontent.com/Reyner2809/Jarvis-Asistente/main/install.ps1 | iex
 # ============================================================================
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "SilentlyContinue"
 
 function Write-Color($color, $text) {
     Write-Host $text -ForegroundColor $color
@@ -89,13 +89,11 @@ if (Test-Path $installDir) {
     $update = Read-Host "  ¿Actualizar? (S/n)"
     if ($update -eq "" -or $update -match "^[sS]") {
         Set-Location $installDir
-        $env:GIT_REDIRECT_STDERR = '2>&1'
-        git pull origin main 2>$null
+        & git pull origin main 2>&1 | Out-String | Out-Null
         Write-Color Green "  ✅ Actualizado"
     }
 } else {
-    $env:GIT_REDIRECT_STDERR = '2>&1'
-    git clone https://github.com/Reyner2809/Jarvis-Asistente.git $installDir 2>$null
+    & git clone https://github.com/Reyner2809/Jarvis-Asistente.git $installDir 2>&1 | Out-String | Out-Null
     if (Test-Path "$installDir\main.py") {
         Write-Color Green "  ✅ Descargado en $installDir"
     } else {
