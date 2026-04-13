@@ -169,6 +169,23 @@ def check_scoop():
     """Verifica si scoop esta instalado."""
     return shutil.which("scoop") is not None
 
+def _refresh_path():
+    """Actualiza el PATH de esta sesion con los valores del sistema."""
+    try:
+        user_path = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             '[Environment]::GetEnvironmentVariable("Path","User")'],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        machine_path = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             '[Environment]::GetEnvironmentVariable("Path","Machine")'],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        os.environ["PATH"] = machine_path + ";" + user_path
+    except Exception:
+        pass
+
 def ollama_has_model(model):
     """Verifica si un modelo de Ollama esta descargado."""
     try:
@@ -480,23 +497,60 @@ def step_dependencies(config):
         print(f"  {C.DIM}Instalando FFmpeg (necesario para audio y voz)...{C.RESET}")
         ffmpeg_installed = False
 
-        # Intentar con winget
-        if shutil.which("winget"):
-            if run_cmd("winget install Gyan.FFmpeg --accept-source-agreements --accept-package-agreements --silent --disable-interactivity",
-                       "Instalando FFmpeg con winget", timeout=180):
+        # Metodo 1: winget
+        if not ffmpeg_installed and shutil.which("winget"):
+            run_cmd("winget install Gyan.FFmpeg --accept-source-agreements --accept-package-agreements --silent --disable-interactivity",
+                    "Instalando FFmpeg con winget", timeout=180)
+            # Actualizar PATH
+            _refresh_path()
+            if check_ffmpeg():
                 ffmpeg_installed = True
 
-        # Intentar con scoop
+        # Metodo 2: scoop
         if not ffmpeg_installed and check_scoop():
-            if run_cmd("scoop install ffmpeg", "Instalando FFmpeg con scoop", timeout=120):
+            run_cmd("scoop install ffmpeg", "Instalando FFmpeg con scoop", timeout=120)
+            if check_ffmpeg():
                 ffmpeg_installed = True
+
+        # Metodo 3: descarga directa de ffmpeg essentials
+        if not ffmpeg_installed:
+            print(f"  {C.DIM}Descargando FFmpeg directamente...{C.RESET}")
+            try:
+                import urllib.request, zipfile
+                ffmpeg_zip = os.path.join(os.environ.get("TEMP", "."), "ffmpeg.zip")
+                ffmpeg_dir = os.path.join(os.environ.get("LOCALAPPDATA", "."), "ffmpeg")
+                urllib.request.urlretrieve(
+                    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+                    ffmpeg_zip,
+                )
+                os.makedirs(ffmpeg_dir, exist_ok=True)
+                with zipfile.ZipFile(ffmpeg_zip, 'r') as z:
+                    for member in z.namelist():
+                        if member.endswith(('ffmpeg.exe', 'ffplay.exe', 'ffprobe.exe')):
+                            filename = os.path.basename(member)
+                            with z.open(member) as src, open(os.path.join(ffmpeg_dir, filename), 'wb') as dst:
+                                dst.write(src.read())
+                os.unlink(ffmpeg_zip)
+                # Agregar al PATH permanente
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-Command",
+                     f'[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path","User") + ";{ffmpeg_dir}", "User")'],
+                    capture_output=True, timeout=10,
+                )
+                os.environ["PATH"] = ffmpeg_dir + ";" + os.environ.get("PATH", "")
+                if check_ffmpeg():
+                    ffmpeg_installed = True
+                    print_ok("FFmpeg descargado e instalado")
+            except Exception as e:
+                print(f"  {C.DIM}Error: {e}{C.RESET}")
 
         if ffmpeg_installed or check_ffmpeg():
             print_ok("FFmpeg instalado")
         else:
             print_warn("No pude instalar FFmpeg automaticamente.")
-            print_info("Jarvis funcionara pero sin soporte de audio en Telegram.")
-            print_info("Para instalar despues: winget install Gyan.FFmpeg")
+            print_info("Para voz en Telegram, instala FFmpeg manualmente:")
+            print_info("  Ejecuta: winget install Gyan.FFmpeg")
+            print_info("  O descarga de: https://ffmpeg.org/download.html")
 
 
 def step_autostart(config):
