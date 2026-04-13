@@ -135,6 +135,28 @@ def run_cmd(cmd, desc="", show_output=False, timeout=300):
 # Deteccion de hardware y software
 # ---------------------------------------------------------------------------
 
+def detect_ram_gb():
+    """Detecta la RAM total del sistema en GB."""
+    try:
+        r = subprocess.run(
+            ["wmic", "computersystem", "get", "TotalPhysicalMemory"],
+            capture_output=True, text=True, timeout=10,
+        )
+        for line in r.stdout.strip().split("\n")[1:]:
+            line = line.strip()
+            if line and line.isdigit():
+                return int(line) // (1024 ** 3)
+    except Exception:
+        pass
+    # Fallback con psutil si esta disponible
+    try:
+        import psutil
+        return int(psutil.virtual_memory().total / (1024 ** 3))
+    except Exception:
+        pass
+    return 0
+
+
 def detect_gpu():
     """Detecta GPU disponible. Retorna dict con info."""
     info = {"has_nvidia": False, "has_amd": False, "name": "", "vram_gb": 0}
@@ -311,13 +333,21 @@ def _setup_ollama(config):
                 sys.exit(1)
             print_ok("Ollama detectado")
 
-    # Detectar GPU
+    # ── Detectar hardware (RAM + GPU) ──────────────────────────────
     print()
+    ram_gb = detect_ram_gb()
     gpu = detect_gpu()
 
+    if ram_gb:
+        print_ok(f"RAM detectada: {ram_gb} GB")
+    else:
+        print_warn("No se pudo detectar la RAM. Se usara el modelo ligero por seguridad.")
+        ram_gb = 0
+
+    # GPU (informativo + config AMD)
     if gpu["has_nvidia"]:
         print_ok(f"GPU detectada: {gpu['name']} (NVIDIA)")
-        print_info("Ollama usara tu GPU automaticamente. Respuestas rapidas.")
+        print_info("Ollama usara tu GPU automaticamente. Respuestas mas rapidas.")
         config["gpu"] = "nvidia"
     elif gpu["has_amd"]:
         print_ok(f"GPU detectada: {gpu['name']} (AMD)")
@@ -338,10 +368,30 @@ def _setup_ollama(config):
             config["gpu"] = "cpu"
     else:
         print_info("No se detecto GPU dedicada. Ollama usara CPU.")
-        print_info("Funciona perfecto, las respuestas tardan ~5 segundos.")
         config["gpu"] = "cpu"
 
-    # Asegurarse de que Ollama esta corriendo
+    # ── Seleccion automatica de modelo segun RAM ─────────────────
+    print()
+    can_run_gemma4 = ram_gb >= 16
+
+    if can_run_gemma4:
+        print_ok(f"Tu PC tiene {ram_gb} GB de RAM — suficiente para gemma4:e4b (modelo avanzado)")
+        print_info("gemma4:e4b: IA mas inteligente, entiende herramientas, multimodal (analiza imagenes).")
+        print_info("llama3.2 se instalara como respaldo ligero.")
+        selected_model = "gemma4:e4b"
+        selected_vision = "gemma4:e4b"  # gemma4 es multimodal, no necesita llava aparte
+        config["ollama_model"] = "gemma4:e4b"
+        config["vision_model"] = "gemma4:e4b"
+    else:
+        print_info(f"Tu PC tiene {ram_gb} GB de RAM — se usara llama3.2 (modelo ligero)")
+        print_info("llama3.2: rapido y eficiente, ideal para PCs con menos de 16 GB.")
+        print_info("Si en el futuro agregas mas RAM, puedes cambiar a gemma4:e4b editando el .env")
+        selected_model = "llama3.2"
+        selected_vision = "llava"
+        config["ollama_model"] = "llama3.2"
+        config["vision_model"] = ""
+
+    # ── Asegurarse de que Ollama esta corriendo ──────────────────
     print()
     print(f"  {C.DIM}Verificando que Ollama este corriendo...{C.RESET}")
     try:
@@ -363,51 +413,72 @@ def _setup_ollama(config):
         except Exception:
             print_warn("No pude iniciar Ollama. Puede que necesites abrirlo manualmente.")
 
-    # Determinar modelos a descargar
+    # ── Descargar modelos ────────────────────────────────────────
     print()
     print(f"  {C.BOLD}Descargando modelos de IA...{C.RESET}")
     print_info("Esto puede tardar varios minutos la primera vez (se descargan una sola vez).")
     print_info("El progreso se muestra en la terminal.")
     print()
 
-    # Modelo principal: llama3.2 (rapido para conversacion)
+    # Siempre instalar llama3.2 (ligero, sirve como fallback)
     if ollama_has_model("llama3.2"):
-        print_ok("llama3.2 ya descargado (modelo de conversacion)")
+        print_ok("llama3.2 ya descargado (modelo ligero / respaldo)")
     else:
-        print(f"  {C.CYAN}Descargando llama3.2 (~2GB) — modelo de conversacion...{C.RESET}")
-        print_info("Esto tarda unos minutos dependiendo de tu internet.")
+        print(f"  {C.CYAN}Descargando llama3.2 (~2GB) — modelo ligero...{C.RESET}")
         result = subprocess.run(["ollama", "pull", "llama3.2"], timeout=600)
         if result.returncode == 0 and ollama_has_model("llama3.2"):
             print_ok("llama3.2 descargado")
         else:
             print_err("Error descargando llama3.2. Puedes intentar despues con: ollama pull llama3.2")
 
-    # Modelo de vision: llava (opcional)
-    print()
-    print(f"  {C.BOLD}Modelo de vision (opcional):{C.RESET}")
-    print_info("llava permite a Jarvis analizar fotos y capturas de pantalla.")
-    print_info("Tamano: ~4.7GB")
-    print()
-    if ollama_has_model("llava"):
-        print_ok("llava ya descargado")
-        config["vision"] = True
-    else:
-        if ask_yes_no("Descargar llava para analisis de imagenes? (4.7GB)", default=True):
-            print(f"  {C.CYAN}Descargando llava (~4.7GB)...{C.RESET}")
-            print_info("Esto puede tardar bastante. Se paciente.")
-            result = subprocess.run(["ollama", "pull", "llava"], timeout=1800)
-            if result.returncode == 0 and ollama_has_model("llava"):
-                print_ok("llava descargado")
+    # Si tiene suficiente RAM, instalar gemma4:e4b (modelo principal avanzado)
+    if can_run_gemma4:
+        print()
+        if ollama_has_model("gemma4:e4b"):
+            print_ok("gemma4:e4b ya descargado (modelo avanzado)")
+            config["vision"] = True
+        else:
+            print(f"  {C.CYAN}Descargando gemma4:e4b (~9.6GB) — modelo avanzado con vision...{C.RESET}")
+            print_info("Este es el modelo principal. Tarda varios minutos, se paciente.")
+            result = subprocess.run(["ollama", "pull", "gemma4:e4b"], timeout=3600)
+            if result.returncode == 0 and ollama_has_model("gemma4:e4b"):
+                print_ok("gemma4:e4b descargado")
                 config["vision"] = True
             else:
-                print_warn("Error descargando llava. Puedes intentar despues con: ollama pull llava")
+                print_warn("Error descargando gemma4:e4b. Jarvis usara llama3.2 como principal.")
+                print_info("Puedes intentar despues con: ollama pull gemma4:e4b")
+                config["ollama_model"] = "llama3.2"
+                config["vision_model"] = ""
                 config["vision"] = False
+    else:
+        # PC con poca RAM: ofrecer llava para vision (opcional, mas ligero que gemma4)
+        print()
+        print(f"  {C.BOLD}Modelo de vision (opcional):{C.RESET}")
+        print_info("llava permite a Jarvis analizar fotos y capturas de pantalla.")
+        print_info("Tamano: ~4.7GB. Requiere al menos 8GB de RAM.")
+        print()
+        if ram_gb >= 8 and not ollama_has_model("llava"):
+            if ask_yes_no("Descargar llava para analisis de imagenes? (4.7GB)", default=False):
+                print(f"  {C.CYAN}Descargando llava (~4.7GB)...{C.RESET}")
+                result = subprocess.run(["ollama", "pull", "llava"], timeout=1800)
+                if result.returncode == 0 and ollama_has_model("llava"):
+                    print_ok("llava descargado")
+                    config["vision"] = True
+                    config["vision_model"] = "llava"
+                else:
+                    print_warn("Error descargando llava. Puedes intentar despues con: ollama pull llava")
+                    config["vision"] = False
+            else:
+                config["vision"] = False
+                print_info("Omitido. Puedes descargarlo despues con: ollama pull llava")
+        elif ollama_has_model("llava"):
+            print_ok("llava ya descargado")
+            config["vision"] = True
+            config["vision_model"] = "llava"
         else:
             config["vision"] = False
-            print_info("Omitido. Puedes descargarlo despues con: ollama pull llava")
-
-    config["ollama_model"] = "llama3.2"
-    config["vision_model"] = "llava" if config.get("vision") else ""
+            if ram_gb < 8:
+                print_info("RAM insuficiente para modelo de vision. Omitido.")
 
 
 def step_telegram(config):
@@ -640,8 +711,8 @@ def step_finalize(config):
         "OPENAI_MODEL=gpt-4o",
         "GEMINI_MODEL=gemini-2.0-flash",
         f"OLLAMA_MODEL={config.get('ollama_model', 'llama3.2')}",
-        f"OLLAMA_VISION_MODEL={config.get('vision_model', 'llava')}",
-        "OLLAMA_FALLBACK_MODEL=llama3.2",
+        f"OLLAMA_VISION_MODEL={config.get('vision_model', config.get('ollama_model', 'llama3.2'))}",
+        f"OLLAMA_FALLBACK_MODEL=llama3.2",
         "",
         "# Telegram",
         f"TELEGRAM_BOT_TOKEN={config.get('telegram_token', '')}",
