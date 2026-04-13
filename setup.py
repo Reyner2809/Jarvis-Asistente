@@ -562,31 +562,56 @@ def step_autostart(config):
     print_info("Te saludara y te dara informacion util del dia.")
     print()
 
-    if not ask_yes_no("¿Quieres que Jarvis arranque al encender el PC?", default=True):
+    # Siempre crear acceso directo en el Escritorio
+    jarvis_dir = os.path.dirname(os.path.abspath(__file__))
+    bat_content = f'@echo off\ncd /d "{jarvis_dir}"\n"{sys.executable}" main.py\npause\n'
+    bat_path = os.path.join(jarvis_dir, "Jarvis.bat")
+    with open(bat_path, "w") as f:
+        f.write(bat_content)
+
+    desktop = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
+    _create_shortcut(bat_path, os.path.join(desktop, "Jarvis.lnk"), "Iniciar Jarvis - Asistente de IA")
+    print_ok("Acceso directo 'Jarvis' creado en el Escritorio")
+    print_info("Haz doble click en 'Jarvis' en tu escritorio para abrirlo.")
+    print()
+
+    if not ask_yes_no("Quieres que Jarvis arranque AUTOMATICAMENTE al encender el PC?", default=True):
         config["autostart"] = False
-        print_info("Omitido. Para iniciar Jarvis manualmente: python main.py")
         return
 
     config["autostart"] = True
 
-    # Crear script de inicio
-    jarvis_dir = os.path.dirname(os.path.abspath(__file__))
-    bat_content = f'@echo off\ncd /d "{jarvis_dir}"\n"{sys.executable}" main.py\npause\n'
-
+    # Inicio automatico con Windows
     startup_dir = os.path.join(
         os.environ.get("APPDATA", ""),
         "Microsoft", "Windows", "Start Menu", "Programs", "Startup",
     )
+    _create_shortcut(bat_path, os.path.join(startup_dir, "Jarvis.lnk"), "Jarvis - Inicio automatico")
+    print_ok("Inicio automatico con Windows configurado")
+    print_info("Jarvis arrancara cada vez que enciendas el PC")
 
-    bat_path = os.path.join(startup_dir, "Jarvis.bat")
+
+def _create_shortcut(target, shortcut_path, description=""):
+    """Crea un acceso directo .lnk de Windows."""
     try:
-        with open(bat_path, "w") as f:
-            f.write(bat_content)
-        print_ok(f"Inicio automatico configurado")
-        print_info(f"Archivo: {bat_path}")
-    except Exception as e:
-        print_err(f"No pude crear el acceso directo: {e}")
-        print_info(f"Puedes crearlo manualmente: copia un .bat en {startup_dir}")
+        ps_script = f'''
+$ws = New-Object -ComObject WScript.Shell
+$sc = $ws.CreateShortcut("{shortcut_path}")
+$sc.TargetPath = "{target}"
+$sc.WorkingDirectory = "{os.path.dirname(target)}"
+$sc.Description = "{description}"
+$sc.Save()
+'''
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_script],
+            capture_output=True, timeout=10,
+        )
+    except Exception:
+        # Fallback: copiar el .bat directamente
+        try:
+            shutil.copy2(target, shortcut_path.replace(".lnk", ".bat"))
+        except Exception:
+            pass
 
 
 def step_finalize(config):
