@@ -183,6 +183,41 @@ def check_ollama():
     """Verifica si Ollama esta instalado."""
     return shutil.which("ollama") is not None
 
+
+def _run_with_heartbeat(cmd, timeout, label):
+    """Corre un subprocess mostrando un heartbeat cada 15s para que el usuario
+    sepa que todo avanza. Retorna el returncode, o -1 si hubo timeout."""
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as e:
+        print(f"  {C.DIM}  Error lanzando {label}: {e}{C.RESET}")
+        return -1
+
+    start = time.time()
+    last_beat = start
+    while True:
+        rc = proc.poll()
+        if rc is not None:
+            elapsed = int(time.time() - start)
+            print(f"  {C.DIM}  [{elapsed}s] {label} completado.{C.RESET}")
+            return rc
+        elapsed = time.time() - start
+        if elapsed > timeout:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            print(f"  {C.DIM}  [{int(elapsed)}s] {label} timeout, cancelando...{C.RESET}")
+            return -1
+        if time.time() - last_beat >= 15:
+            print(f"  {C.DIM}  [{int(elapsed)}s] {label} en progreso (puede tardar varios minutos, no cierres la ventana)...{C.RESET}")
+            last_beat = time.time()
+        time.sleep(0.5)
+
 def check_ffmpeg():
     """Verifica si FFmpeg esta instalado."""
     return shutil.which("ffmpeg") is not None
@@ -269,19 +304,16 @@ def _setup_ollama(config):
         # Intentar con winget
         installed = False
         if shutil.which("winget"):
-            print(f"  {C.DIM}Instalando Ollama con winget (puede tardar unos minutos)...{C.RESET}")
-            result = subprocess.run(
-                ["winget", "install", "Ollama.Ollama", "--accept-source-agreements", "--accept-package-agreements", "--silent", "--disable-interactivity"],
-                capture_output=True, text=True, timeout=300,
+            print(f"  {C.DIM}Instalando Ollama con winget (puede tardar 2-5 minutos)...{C.RESET}")
+            print(f"  {C.DIM}Veras mensajes de progreso cada 15s — esto confirma que todo va bien.{C.RESET}")
+            _run_with_heartbeat(
+                ["winget", "install", "Ollama.Ollama",
+                 "--accept-source-agreements", "--accept-package-agreements",
+                 "--silent", "--disable-interactivity"],
+                timeout=300,
+                label="winget install Ollama",
             )
-            # Actualizar PATH
-            user_path = subprocess.run(["powershell", "-NoProfile", "-Command",
-                "[Environment]::GetEnvironmentVariable('Path','User')"],
-                capture_output=True, text=True).stdout.strip()
-            machine_path = subprocess.run(["powershell", "-NoProfile", "-Command",
-                "[Environment]::GetEnvironmentVariable('Path','Machine')"],
-                capture_output=True, text=True).stdout.strip()
-            os.environ["PATH"] = machine_path + ";" + user_path + ";" + os.environ.get("PATH", "")
+            _refresh_path()
 
             if check_ollama():
                 installed = True
@@ -289,19 +321,19 @@ def _setup_ollama(config):
 
         if not installed:
             # Descarga directa
-            print(f"  {C.DIM}Descargando Ollama desde ollama.ai...{C.RESET}")
+            print(f"  {C.DIM}Descargando Ollama desde ollama.ai (~700MB)...{C.RESET}")
             try:
                 import urllib.request
                 installer_path = os.path.join(os.environ.get("TEMP", "."), "OllamaSetup.exe")
                 urllib.request.urlretrieve("https://ollama.com/download/OllamaSetup.exe", installer_path)
-                print(f"  {C.DIM}Ejecutando instalador...{C.RESET}")
-                subprocess.run([installer_path, "/VERYSILENT", "/NORESTART"], timeout=120)
+                print(f"  {C.DIM}Ejecutando instalador silencioso (tarda 1-2 minutos)...{C.RESET}")
+                _run_with_heartbeat(
+                    [installer_path, "/VERYSILENT", "/NORESTART"],
+                    timeout=180,
+                    label="OllamaSetup.exe",
+                )
                 time.sleep(5)
-                # Actualizar PATH
-                user_path = subprocess.run(["powershell", "-NoProfile", "-Command",
-                    "[Environment]::GetEnvironmentVariable('Path','User')"],
-                    capture_output=True, text=True).stdout.strip()
-                os.environ["PATH"] = user_path + ";" + os.environ.get("PATH", "")
+                _refresh_path()
 
                 if check_ollama():
                     installed = True
