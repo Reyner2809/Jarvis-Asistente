@@ -87,7 +87,9 @@ class IntentRouter:
         """
         try:
             payload = json.dumps({
-                "model": Config.OLLAMA_MODEL,
+                # Usa el router model (rapido, ej llama3.2) — no el modelo
+                # principal de razonamiento (gemma4:e4b) que es lento.
+                "model": Config.OLLAMA_ROUTER_MODEL,
                 "messages": [
                     {"role": "system", "content": INTENT_PROMPT},
                     {"role": "user", "content": user_input},

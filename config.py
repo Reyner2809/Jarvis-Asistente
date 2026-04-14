@@ -18,7 +18,9 @@ class Config:
     CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
+    # Router model: clasificador de intenciones (debe ser rapido, ej llama3.2)
+    OLLAMA_ROUTER_MODEL = os.getenv("OLLAMA_ROUTER_MODEL", "llama3.2")
     OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "llava")
     OLLAMA_FALLBACK_MODEL = os.getenv("OLLAMA_FALLBACK_MODEL", "llama3.2")
 

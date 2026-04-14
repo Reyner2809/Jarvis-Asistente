@@ -46,12 +46,46 @@ class FastCommandDetector:
         ],
     }
 
+    # Verbos sinonimos para abrir aplicaciones (regex-grupo, no-capturador)
+    # Cubre: abre, abreme, ejecuta, ejecutame, lanza, lanzame, inicia, iniciame,
+    # arranca, corre, prende, enciende, activa, levanta, dame, sacame, ponme,
+    # mas formas en infinitivo (abrir, ejecutar, etc.)
+    # Nota: 'ponme' se omite aqui porque es ambiguo ("ponme una cancion" no es
+    # abrir). El compound pattern ya lo captura cuando viene con "y pon/busca".
+    _OPEN_VERBS = (
+        r"(?:abre|abreme|abrir|ejecuta|ejecutame|ejecutar|lanza|lanzame|lanzar|"
+        r"inicia|iniciame|iniciar|arranca|arrancame|arrancar|corre|correme|correr|"
+        r"prende|prendeme|prender|enciende|enciendeme|encender|activa|activame|activar|"
+        r"levanta|levantame|levantar|dame|sacame|abremela|abremelo|"
+        r"podrias\s+abrir|puedes\s+abrir|necesito|quiero)"
+    )
+    # Verbos sinonimos para cerrar
+    _CLOSE_VERBS = (
+        r"(?:cierra|cierrame|cierralo|cierramela|cerrar|"
+        r"termina|terminame|terminar|finaliza|finalizame|finalizar|"
+        r"mata|matame|matar|kill|quita|quitame|quitar)"
+    )
+    # Verbos sinonimos para reproducir (compuestos con spotify/youtube)
+    _PLAY_VERBS = (
+        r"(?:pon|ponme|reproduce|reproducir|coloca|colocame|busca|buscame|play|"
+        r"escucha|escuchame|tocame|toca|tira|tirame|sueltame|suelta|dame|"
+        r"ponle|metele|cantame)"
+    )
+
     # Patrones de comandos rapidos
-    # FAST COMMANDS: Solo patrones 100% inequivocos e instantaneos.
-    # Todo lo ambiguo (pon X, reproduce X, busca X) va al Intent Router
-    # que entiende contexto (YouTube vs Spotify vs Google, etc.)
+    # FAST COMMANDS: patrones que cubren acciones simples sin razonamiento.
+    # Ordenados de MAS especifico a MAS general — el primero que matchea gana.
     PATTERNS = [
-        # Spotify EXPLICITO (solo cuando menciona "spotify" textualmente)
+        # === ACCIONES COMPUESTAS GENERICAS (deben ir ANTES del open_app simple) ===
+        # "abre/ejecuta/lanza <APP> y <VERBO> <CONTENIDO>"
+        # Captura: (app, verbo_accion, contenido). El handler decide que tool usar.
+        # Ejemplos:
+        #   "ejecuta spotify y pon EL REGENTE"  -> spotify_search(EL REGENTE)
+        #   "abre youtube y pon Bad Bunny"      -> open_and_search(youtube, Bad Bunny)
+        #   "lanza chrome y busca recetas"      -> open_and_search(chrome, recetas) o search_web
+        (rf"^{_OPEN_VERBS}\s+(?:la\s+|el\s+|los\s+|las\s+|mi\s+|me\s+)?(?:app\s+|aplicacion\s+|programa\s+|web\s+|pagina\s+)?(.+?)(?:\s+y\s+|\s*,\s*)({_PLAY_VERBS}|busca|buscame|search|escribe|escribeme)\s+(.+)", "_handle_open_compound"),
+
+        # === SPOTIFY EXPLICITO (solo cuando menciona "spotify" textualmente) ===
         (r"(?:pon|reproduce|reproducir|play|busca|coloca|ponme).+(?:me gusta|liked|favorit|mis gustos).*(?:en\s+)?spotify", "_handle_spotify_liked"),
         (r"(?:busca|buscar|buscame)\s+en\s+spotify\s+(.+)", "_handle_spotify_search"),
         (r"(?:pon|reproduce|play|coloca|ponme)\s+(.+?)\s+en\s+spotify", "_handle_spotify_search"),
@@ -89,6 +123,14 @@ class FastCommandDetector:
         (r"(?:cancela|cancelar)\s+(?:el\s+)?(?:apagado|reinicio|shutdown|restart)", "_handle_cancel_shutdown"),
         # Presentacion (inequivoco)
         (r"(?:presentate|preséntate|quien\s+eres|quién\s+eres|como\s+te\s+llamas|cómo\s+te\s+llamas|que\s+eres|qué\s+eres|dime\s+quien\s+eres|tu\s+nombre)", "_handle_introduce"),
+
+        # === ABRIR / CERRAR APP (catch-all al FINAL) ===
+        # Abrir cualquier app: "abre X", "ejecuta X", "lanza X", "inicia X", etc.
+        # Se evalua despues de los patrones especificos (spotify, youtube, etc.)
+        # Si la app no existe, _handle_open retorna None y cae al IA.
+        (rf"^{_OPEN_VERBS}\s+(?:la\s+|el\s+|los\s+|las\s+|mi\s+|me\s+)?(?:app\s+|aplicacion\s+|programa\s+)?(.+)", "_handle_open"),
+        # Cerrar app (excluye pc/sesion que tienen sus propios patrones de shutdown/logoff arriba)
+        (rf"^{_CLOSE_VERBS}\s+(?:la\s+|el\s+|los\s+|las\s+|mi\s+|me\s+)?(?:app\s+|aplicacion\s+|programa\s+|ventana\s+(?:de\s+)?)?(?!(?:el\s+|la\s+)?(?:pc|computador|computadora|equipo|ordenador|sesion|sesión)\b)(.+)", "_handle_close"),
     ]
 
     def __init__(self):
@@ -120,33 +162,33 @@ class FastCommandDetector:
 
         return False, ""
 
+    # Mapa de sitios web conocidos para resolver app -> URL en handlers compuestos
+    _WEB_KEYWORDS = {
+        "youtube": "youtube.com",
+        "google": "google.com",
+        "gmail": "mail.google.com",
+        "twitter": "twitter.com",
+        "x": "x.com",
+        "facebook": "facebook.com",
+        "instagram": "instagram.com",
+        "github": "github.com",
+        "whatsapp web": "web.whatsapp.com",
+        "chatgpt": "chat.openai.com",
+        "linkedin": "linkedin.com",
+        "reddit": "reddit.com",
+        "twitch": "twitch.tv",
+        "netflix": "netflix.com",
+        "amazon": "amazon.com",
+        "mercadolibre": "mercadolibre.com",
+    }
+
     def _handle_open(self, match) -> str | None:
         raw_target = match.group(1).strip().rstrip(".")
         # Limpia articulos ('la calculadora' -> 'calculadora', 'a chrome' -> 'chrome')
         target = pc_control._clean_app_name(raw_target) or raw_target
-
-        # Detectar si es una web
-        web_keywords = {
-            "youtube": "youtube.com",
-            "google": "google.com",
-            "gmail": "mail.google.com",
-            "twitter": "twitter.com",
-            "x": "x.com",
-            "facebook": "facebook.com",
-            "instagram": "instagram.com",
-            "github": "github.com",
-            "whatsapp web": "web.whatsapp.com",
-            "chatgpt": "chat.openai.com",
-            "linkedin": "linkedin.com",
-            "reddit": "reddit.com",
-            "twitch": "twitch.tv",
-            "netflix": "netflix.com",
-            "amazon": "amazon.com",
-            "mercadolibre": "mercadolibre.com",
-        }
-
         target_lower = target.lower()
-        for key, url in web_keywords.items():
+
+        for key, url in self._WEB_KEYWORDS.items():
             if key in target_lower:
                 result = pc_control.open_website(url)
                 if result["success"]:
@@ -158,6 +200,75 @@ class FastCommandDetector:
         if result["success"]:
             return f"{self._random_response('open')} {target.capitalize()} abierto."
         return None  # Dejar que la IA maneje si no se pudo
+
+    def _handle_open_compound(self, match) -> str | None:
+        """
+        Maneja "abre/ejecuta <APP> y <VERBO> <CONTENIDO>" para CUALQUIER app.
+        Decide la accion correcta segun la app y el verbo:
+          - Spotify + play_verb -> spotify_search (Spotify se abre solo)
+          - Sitio web (youtube, github, etc.) + verb -> open_and_search
+          - App desktop (chrome, brave) + busca -> open app + search_web
+          - Cualquier app + escribe -> open app + type_text
+        Si no puede resolver, retorna None y deja al IA.
+        """
+        from . import automation
+        import time
+
+        raw_app = match.group(1).strip().rstrip(",.")
+        verb = match.group(2).strip().lower()
+        content = match.group(3).strip().rstrip(".")
+        if not content:
+            return None
+
+        # Limpia articulos
+        app = pc_control._clean_app_name(raw_app) or raw_app
+        app_lower = app.lower()
+
+        # Verbo "escribe X" -> abrir app y tipear
+        if verb in ("escribe", "escribeme"):
+            open_result = pc_control.find_and_open_app(app)
+            if not open_result.get("success"):
+                # Probar como web
+                for key, url in self._WEB_KEYWORDS.items():
+                    if key in app_lower:
+                        pc_control.open_website(url)
+                        open_result = {"success": True}
+                        break
+            if not open_result.get("success"):
+                return None
+            time.sleep(1.5)  # esperar a que la app abra
+            try:
+                automation.type_text(content)
+            except Exception:
+                return None
+            return f"{self._random_response('open')} {app.capitalize()} abierto y texto escrito."
+
+        # Spotify: spotify_search ya abre Spotify automaticamente
+        if "spotify" in app_lower:
+            return self._spotify_search_and_play(content)
+
+        # Sitios web conocidos (youtube, github, google, etc.) -> open_and_search
+        for key, url in self._WEB_KEYWORDS.items():
+            if key in app_lower:
+                try:
+                    result = automation.open_and_search(url, content)
+                    if result.get("success"):
+                        return f"{self._random_response('open')} {key.capitalize()} abierto, buscando '{content}'."
+                except Exception:
+                    pass
+                return None
+
+        # App desktop (chrome, brave, firefox) + busca -> abrir y buscar en Google
+        if verb in ("busca", "buscame", "search"):
+            open_result = pc_control.find_and_open_app(app)
+            if open_result.get("success"):
+                time.sleep(1.0)
+                pc_control.search_web(content)
+                return f"{self._random_response('search')} {app.capitalize()} abierto, buscando '{content}'."
+            return None
+
+        # No supimos resolver el compuesto -> dejar al IA
+        return None
 
     def _handle_whatsapp_send(self, match) -> str | None:
         contact = match.group(1).strip().rstrip(".,")
