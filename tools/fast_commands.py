@@ -47,10 +47,15 @@ class FastCommandDetector:
     }
 
     # Patrones de comandos rapidos
-    # FAST COMMANDS: Solo patrones 100% inequivocos e instantaneos.
-    # Todo lo ambiguo (pon X, reproduce X, busca X) va al Intent Router
-    # que entiende contexto (YouTube vs Spotify vs Google, etc.)
+    # FAST COMMANDS: Acciones comunes que se ejecutan al instante sin IA.
+    # Tareas complejas, investigacion y preguntas van a gemma4 (Agent Loop).
     PATTERNS = [
+        # Abrir aplicaciones (cualquier app instalada en el PC)
+        (r"(?:abre|abrir|abreme|ejecuta|lanza|inicia|open)\s+(.+)", "_handle_open"),
+        # Cerrar aplicaciones
+        (r"(?:cierra|cerrar|cierrame|mata|close|kill)\s+(.+)", "_handle_close"),
+        # Buscar en web
+        (r"(?:busca|buscar|buscame|search|googlea)\s+(.+)", "_handle_search"),
         # Spotify EXPLICITO (solo cuando menciona "spotify" textualmente)
         (r"(?:pon|reproduce|reproducir|play|busca|coloca|ponme).+(?:me gusta|liked|favorit|mis gustos).*(?:en\s+)?spotify", "_handle_spotify_liked"),
         (r"(?:busca|buscar|buscame)\s+en\s+spotify\s+(.+)", "_handle_spotify_search"),
