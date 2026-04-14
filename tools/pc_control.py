@@ -82,6 +82,7 @@ _APP_NAME_NOISE_PREFIXES = (
 _APP_NAME_ARTICLES = (
     "a la ", "a el ", "al ", "a ", "la ", "el ", "los ", "las ",
     "un ", "una ", "unos ", "unas ", "mi ", "tu ", "su ",
+    "de la ", "de el ", "del ", "de ",
 )
 
 

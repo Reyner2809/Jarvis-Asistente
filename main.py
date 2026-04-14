@@ -219,11 +219,18 @@ def main():
     fast_cmd = FastCommandDetector()
     intent_router = IntentRouter()
 
-    # Pre-calentar el modelo de Ollama en background para que la primera
-    # interaccion no tenga 15s de delay por cargar el modelo en RAM.
+    # Pre-calentar AMBOS modelos de Ollama en background para evitar el cold
+    # start de ~15s en la primera interaccion:
+    #  - Router (llama3.2): se usa en cada input para clasificar intencion
+    #  - Principal (gemma4:e4b): se usa en chat/agent loop para razonar
     def _warmup():
         try:
-            intent_router.classify("hola")
+            intent_router.classify("hola")  # carga router model
+        except Exception:
+            pass
+        try:
+            # carga el modelo principal con un mensaje minimo
+            provider_manager.chat([{"role": "user", "content": "ok"}], "Responde solo OK.")
         except Exception:
             pass
     threading.Thread(target=_warmup, daemon=True).start()
