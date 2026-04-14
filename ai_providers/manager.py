@@ -46,7 +46,7 @@ class ProviderManager:
 
         return True
 
-    def chat(self, messages: list, system_prompt: str, stream_callback=None) -> str:
+    def chat(self, messages: list, system_prompt: str, stream_callback=None, model_override: str | None = None) -> str:
         last_error = None
 
         for provider_name in self._fallback_order:
@@ -61,10 +61,15 @@ class ProviderManager:
                     )
                     self._current = provider
 
-                # Solo Ollama soporta streaming por ahora
-                if stream_callback and hasattr(provider.chat, '__code__') and 'stream_callback' in provider.chat.__code__.co_varnames:
-                    return provider.chat(messages, system_prompt, stream_callback=stream_callback)
-                return provider.chat(messages, system_prompt)
+                # Pasar model_override solo a proveedores que lo soporten
+                # (actualmente Ollama). El resto ignora el parametro.
+                chat_params = provider.chat.__code__.co_varnames if hasattr(provider.chat, '__code__') else ()
+                kwargs = {}
+                if stream_callback and 'stream_callback' in chat_params:
+                    kwargs['stream_callback'] = stream_callback
+                if model_override and 'model_override' in chat_params:
+                    kwargs['model_override'] = model_override
+                return provider.chat(messages, system_prompt, **kwargs)
 
             except Exception as e:
                 last_error = e
@@ -117,6 +122,7 @@ class ProviderManager:
     def agent_chat(
         self, messages, system_prompt, tools_schema,
         execute_fn=None, max_steps=5, on_tool_call=None, stream_callback=None,
+        model_override: str | None = None,
     ) -> str:
         """Agent Loop: LLM con function calling nativo y multi-paso."""
         last_error = None
@@ -130,6 +136,14 @@ class ProviderManager:
                 if provider != self._current:
                     console.print(f"  [yellow]Cambiando a {provider_name.upper()}...[/yellow]")
                     self._current = provider
+                # Pasar model_override solo si el proveedor lo soporta
+                ac_params = provider.agent_chat.__code__.co_varnames if hasattr(provider.agent_chat, '__code__') else ()
+                if model_override and 'model_override' in ac_params:
+                    return provider.agent_chat(
+                        messages, system_prompt, tools_schema,
+                        execute_fn, max_steps, on_tool_call, stream_callback,
+                        model_override=model_override,
+                    )
                 return provider.agent_chat(
                     messages, system_prompt, tools_schema,
                     execute_fn, max_steps, on_tool_call, stream_callback,

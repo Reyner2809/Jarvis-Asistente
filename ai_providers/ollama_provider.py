@@ -30,11 +30,16 @@ class OllamaProvider(AIProvider):
         except Exception:
             return False
 
-    def _get_models_to_try(self) -> list[str]:
-        """Devuelve lista de modelos a intentar: principal + fallback."""
-        models = [Config.OLLAMA_MODEL]
+    def _get_models_to_try(self, model_override: str | None = None) -> list[str]:
+        """Devuelve lista de modelos a intentar: el solicitado + fallback.
+
+        Si se pasa model_override, ese es el principal y ademas probamos el
+        fallback por si el solicitado no esta descargado.
+        """
+        primary = model_override or Config.OLLAMA_MODEL
+        models = [primary]
         fb = Config.OLLAMA_FALLBACK_MODEL
-        if fb and fb != Config.OLLAMA_MODEL:
+        if fb and fb != primary:
             models.append(fb)
         return models
 
@@ -90,7 +95,7 @@ class OllamaProvider(AIProvider):
                     continue
                 raise
 
-    def chat(self, messages: list, system_prompt: str, stream_callback=None) -> str:
+    def chat(self, messages: list, system_prompt: str, stream_callback=None, model_override: str | None = None) -> str:
         ollama_messages = [{"role": "system", "content": system_prompt}]
         for msg in messages:
             ollama_messages.append({
@@ -99,9 +104,11 @@ class OllamaProvider(AIProvider):
             })
 
         last_error = None
-        for model in self._get_models_to_try():
+        # Chat simple: 60s es MAS que suficiente. Si tarda mas, algo anda mal.
+        timeout_s = 60
+        for model in self._get_models_to_try(model_override):
             try:
-                result = self._call_chat(ollama_messages, model, stream_callback=stream_callback)
+                result = self._call_chat(ollama_messages, model, timeout=timeout_s, stream_callback=stream_callback)
                 if self._active_model != model:
                     self._active_model = model
                 return result
@@ -122,6 +129,7 @@ class OllamaProvider(AIProvider):
         max_steps: int = 5,
         on_tool_call=None,
         stream_callback=None,
+        model_override: str | None = None,
     ) -> str:
         """
         Agent Loop estilo OpenClaw: el LLM puede llamar tools, recibir
@@ -152,7 +160,7 @@ class OllamaProvider(AIProvider):
             ollama_messages.append({"role": msg["role"], "content": msg["content"]})
 
         last_error = None
-        for model in self._get_models_to_try():
+        for model in self._get_models_to_try(model_override):
             try:
                 return self._agent_loop(
                     ollama_messages, model, tools_schema,
@@ -193,7 +201,9 @@ class OllamaProvider(AIProvider):
                 headers={"Content-Type": "application/json"},
             )
 
-            with urllib.request.urlopen(req, timeout=300) as resp:
+            # 90s por paso: suficiente incluso para gemma4 razonando. Si tarda
+            # mas, algo se atasco. Antes eran 300s = 5 min de pantalla congelada.
+            with urllib.request.urlopen(req, timeout=90) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
 
             msg = data.get("message", {})

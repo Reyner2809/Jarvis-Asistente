@@ -66,6 +66,94 @@ def needs_internet(text: str) -> bool:
     """Detecta si la pregunta necesita informacion actualizada de internet."""
     return bool(_internet_re.search(text))
 
+
+# ===========================================================================
+# CLASIFICADOR HEURISTICO DE INPUT
+# ===========================================================================
+# El objetivo es que el LLM pesado (gemma4:e4b o el que el usuario tenga como
+# OLLAMA_MODEL) SOLO se invoque para tareas que de verdad lo requieran:
+#   - Analisis de documentos ("analizame este pdf")
+#   - Generacion de codigo ("hazme un script para X")
+#   - Correccion de codigo ("arregla este error")
+#   - Explicaciones profundas ("como funciona un motor")
+#   - Investigacion elaborada
+#
+# Todo lo demas (abrir/cerrar apps, reproducir, buscar, saludos, preguntas
+# cortas, media controls) debe ir por el PATH RAPIDO:
+#   fast_commands -> intent_router(llama3.2) -> chat(llama3.2)
+#
+# Esto significa que:
+#   - Usuario con OLLAMA_MODEL=llama3.2: TODO vuela (~1-3s por respuesta).
+#   - Usuario con OLLAMA_MODEL=gemma4:e4b: solo las 10-20% de consultas
+#     realmente pesadas usan gemma4. El resto usa llama3.2 (light model).
+#     Resultado: el doble o triple de rapidez promedio.
+
+# Palabras/frases que indican que el usuario SI quiere razonamiento pesado.
+# Si detectamos esto, vamos al modelo principal (puede ser gemma4) con agent
+# loop completo.
+_HEAVY_TASK_RE = re.compile(
+    r"\b("
+    # Analisis de documentos/imagenes/datos
+    r"analiza(?:me)?|analizalo|analizala|analizar|analisis|"
+    # Generacion/escritura de contenido largo
+    r"hazme\s+(?:un|una)\s+(?:script|codigo|programa|funcion|ensayo|articulo|redaccion|carta|correo|email|resumen\s+(?:largo|detallado|completo)|comparacion|tabla|plan|plantilla|presentacion)|"
+    r"escribeme\s+(?:un|una)\s+(?:script|codigo|programa|funcion|ensayo|articulo|carta|correo|email|poema|cancion|historia|cuento|plan)|"
+    r"(?:pasa|dame|generame|crea(?:me)?)\s+(?:un|una)\s+(?:script|codigo|programa|funcion|snippet|ejemplo\s+de\s+codigo)|"
+    # Correccion/debug
+    r"corrigeme|corrige\s+(?:este|el|la|mi)|debug(?:uea|gea)?|depura|arregla\s+(?:este|el|la|mi|mi\s+codigo)|"
+    r"revisa\s+(?:mi|este|el|la)\s+(?:codigo|script|error|funcion|programa)|"
+    # Explicaciones profundas
+    r"como\s+funciona(?:n)?\s+(?:un|una|el|la|los|las)|"
+    r"por\s*que\s+(?:sucede|pasa|es|ocurre)|"
+    r"explicame\s+(?:a\s+fondo|en\s+detalle|detalladamente|el\s+concepto|como\s+funciona|por\s*que)|"
+    r"que\s+es\s+(?:un|una|el\s+concepto)|"
+    # Investigacion
+    r"investiga(?:me)?|investigar|compara(?:me)?(?:\s+entre)?|"
+    # Resumir/extraer de documento
+    r"resume\s+(?:este|el|ese|mi)\s+(?:documento|archivo|pdf|texto|file)|"
+    r"resumeme\s+(?:este|el|ese|mi)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Verbos de accion directa. Si el input empieza con uno de estos y NO matcheo
+# heavy_task, es una accion simple. La mandamos al intent_router aunque tenga
+# "y" (tareas compuestas como "abre youtube Y busca X").
+_ACTION_VERB_RE = re.compile(
+    r"^\s*(?:jarvis[,\s]+)?(?:"
+    r"abre|abrir|abreme|cierra|cerrar|cierrame|"
+    r"pon|ponme|ponle|reproduce|reproduceme|reproducir|coloca|colocame|"
+    r"busca|buscame|buscalo|search|googlea|"
+    r"baja|sube|subele|bajale|aumenta|reduce|silencia|mutea|"
+    r"bloquea|bloquear|lock|apaga|apagar|reinicia|reiniciar|"
+    r"suspende|suspender|hiberna|hibernar|duerme|"
+    r"captura|screenshot|pantallazo|graba|grabar|"
+    r"dime\s+la\s+hora|que\s+hora|hora\s+es|"
+    r"recuerda(?:me)?|avisame|agenda(?:me)?|programa(?:me)?|"
+    r"manda(?:le)?|enviame|envia(?:le)?|escribele|"
+    r"siguiente|anterior|pausa|pausar|play|stop|detente|para|"
+    r"ejecuta|lanza|inicia|arranca|prende|enciende|activa|levanta|"
+    r"sacame|dame\s+(?:la|el|los|las)?|mostrame|muestrame|"
+    r"que\s+hay|que\s+tengo|lista(?:me)?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def classify_input(text: str) -> str:
+    """Clasifica el input como 'heavy', 'action' o 'simple'.
+
+    - 'heavy': tarea que realmente necesita el modelo potente.
+    - 'action': comando de accion (abrir/cerrar/reproducir/etc).
+    - 'simple': pregunta corta o charla casual.
+    """
+    t = text.strip()
+    if _HEAVY_TASK_RE.search(t):
+        return "heavy"
+    if _ACTION_VERB_RE.match(t):
+        return "action"
+    return "simple"
+
 console = Console()
 
 # Patrones que indican que el usuario pregunta SOBRE un documento cargado
@@ -150,6 +238,7 @@ def keyboard_input_thread(input_queue: queue.Queue, stop_event: threading.Event)
 def _startup_greeting(user_memory, voice_engine, mic_available, stt, telegram_io):
     """Saludo proactivo al iniciar Jarvis, estilo JARVIS de Iron Man."""
     from datetime import datetime
+    import random as _rnd
 
     now = datetime.now()
     hour = now.hour
@@ -175,7 +264,16 @@ def _startup_greeting(user_memory, voice_engine, mic_available, stt, telegram_io
     name_part = f", senor {user_name}" if user_name else ", senor"
     date_str = now.strftime("%A %d de %B, %I:%M %p")
 
-    greeting = f"{saludo}{name_part}. Un gusto atenderle."
+    # Variacion con personalidad
+    closers = [
+        "A su servicio, como siempre.",
+        "A su entera disposicion.",
+        "Listo para trabajar, senor.",
+        "Aqui me tiene.",
+        "Todos los sistemas en linea.",
+        "Un placer volver a atenderle.",
+    ]
+    greeting = f"{saludo}{name_part}. {_rnd.choice(closers)}"
     time_info = f"Son las {date_str}."
 
     console.print(f"\n  [bold cyan]{Config.ASSISTANT_NAME}:[/bold cyan] {greeting}")
@@ -219,19 +317,29 @@ def main():
     fast_cmd = FastCommandDetector()
     intent_router = IntentRouter()
 
-    # Pre-calentar AMBOS modelos de Ollama en background para evitar el cold
-    # start de ~15s en la primera interaccion:
-    #  - Router (llama3.2): se usa en cada input para clasificar intencion
-    #  - Principal (gemma4:e4b): se usa en chat/agent loop para razonar
+    # Pre-calentar SOLO el modelo ligero (llama3.2) en background. Es el que
+    # se usa en el 90% de interacciones (router + chat simple + acciones).
+    # El modelo pesado (gemma4:e4b u otro que el usuario tenga como
+    # OLLAMA_MODEL) NO se precarga: solo se usa para tareas heavy
+    # (infrecuentes) y pagar su cold start en el primer uso real es mejor que
+    # gastar RAM a ciegas al arranque. Warmup es 100% silencioso.
     def _warmup():
+        import urllib.request, urllib.error, json as _json
         try:
-            intent_router.classify("hola")  # carga router model
+            payload = _json.dumps({
+                "model": Config.OLLAMA_LIGHT_MODEL,
+                "messages": [{"role": "user", "content": "ok"}],
+                "stream": False,
+                "options": {"num_predict": 1},
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                "http://localhost:11434/api/chat",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            urllib.request.urlopen(req, timeout=30).read()
         except Exception:
-            pass
-        try:
-            # carga el modelo principal con un mensaje minimo
-            provider_manager.chat([{"role": "user", "content": "ok"}], "Responde solo OK.")
-        except Exception:
+            # Silencioso: si falla, el primer input real lo cargara.
             pass
     threading.Thread(target=_warmup, daemon=True).start()
     memory = ConversationMemory()
@@ -546,25 +654,30 @@ def main():
                     console.print(f"\n  [cyan]{Config.ASSISTANT_NAME} >[/cyan] ", end="")
                 continue
 
-            # INTENT ROUTER: Si el regex no lo atrapo, la IA decide rapidamente
-            # si es una ACCION (tool) o una PREGUNTA. Solo lo usamos si el input
-            # parece un comando (corto, imperativo). Para preguntas largas o
-            # conversacionales, saltar directo al AI completo para no agregar 3s.
+            # CLASIFICAR el input: 'heavy' | 'action' | 'simple'
+            # Esto determina tanto el camino como el modelo a usar.
+            input_class = classify_input(user_input)
+
+            # INTENT ROUTER: para acciones probamos SIEMPRE, aunque sea
+            # compuesta — el fast_commands ya cubrio las compuestas comunes,
+            # asi que lo que quede aqui debe ir por tool_call rapido.
+            # Para preguntas/chat saltamos el router (no aporta).
             _looks_like_question = bool(re.match(
                 r'^(?:que|qué|como|cómo|cuando|cuándo|donde|dónde|por\s*que|porqué|'
                 r'cual|cuál|cuanto|cuánto|quien|quién|explicame|cuentame|dime\s+(?:un|algo)|'
                 r'sabes|puedes\s+(?:explicar|decir|contar))\b',
                 user_input.lower(),
             ))
-            # Tareas compuestas ("busca X Y dime/crea/manda Z") necesitan el
-            # Agent Loop, no el Intent Router, porque requieren multiples pasos.
-            _is_compound_task = bool(re.search(
+            # Compound SOLO para tareas 'heavy' (ej "busca X y crealo en word")
+            _is_compound_task = (input_class == "heavy") and bool(re.search(
                 r'\by\s+(?:dime|crea|crealas|crealo|ponlas|ponlo|manda|mandame|mandale|'
-                r'enviale|envia|enviame|resume|resumelo|resumeme|guarda|guardalo|abre|analiza)\b',
+                r'enviale|envia|enviame|resume|resumelo|resumeme|guarda|guardalo|analiza)\b',
                 user_input.lower(),
             ))
             intent = None
-            if not _looks_like_question and not _is_compound_task:
+            # Intentar router si: es accion (aunque sea compuesta), o es input
+            # corto no-pregunta. Saltar si es claramente pregunta o tarea pesada.
+            if input_class == "action" or (not _looks_like_question and not _is_compound_task and input_class != "heavy"):
                 intent = intent_router.classify(user_input)
             if intent is not None:
                 tool_name = intent["tool"]
@@ -633,9 +746,20 @@ def main():
             def _on_tool_call(step, tool_name, args):
                 console.print(f"  [bold magenta]Paso {step}[/bold magenta] {tool_name}({args})")
 
+            # Elegir modelo segun la clase del input:
+            #   - 'heavy': modelo principal (OLLAMA_MODEL, ej gemma4)
+            #   - 'action' / 'simple': modelo ligero (OLLAMA_LIGHT_MODEL, llama3.2)
+            # Y el numero de pasos del agent loop se reduce para tareas ligeras.
+            if input_class == "heavy":
+                model_override = None  # usa default (principal)
+                steps_for_agent = Config.MAX_AGENT_STEPS
+            else:
+                model_override = Config.OLLAMA_LIGHT_MODEL
+                steps_for_agent = Config.MAX_AGENT_STEPS_LIGHT
+
             try:
-                if _looks_like_question:
-                    # Conversacion: chat rapido sin tools (~5s)
+                if _looks_like_question or input_class == "simple":
+                    # Conversacion: chat rapido sin tools (~2-5s con modelo ligero)
                     console.print("")
                     with Live(
                         Spinner("dots", text="[cyan] Pensando...[/cyan]", style="cyan"),
@@ -645,9 +769,10 @@ def main():
                         response = provider_manager.chat(
                             memory.get_context_messages(),
                             system_prompt,
+                            model_override=model_override,
                         )
                 else:
-                    # Tarea con acciones: Agent Loop con tools (~5-15s)
+                    # Tarea con acciones: Agent Loop con tools
                     console.print("")
                     with Live(
                         Spinner("dots", text="[cyan] Pensando...[/cyan]", style="cyan"),
@@ -659,8 +784,9 @@ def main():
                             system_prompt=system_prompt,
                             tools_schema=get_tools_schema(),
                             execute_fn=execute_tool_call,
-                            max_steps=Config.MAX_AGENT_STEPS,
+                            max_steps=steps_for_agent,
                             on_tool_call=_on_tool_call,
+                            model_override=model_override,
                         )
 
             except ConnectionError as e:

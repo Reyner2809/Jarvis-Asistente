@@ -1,8 +1,25 @@
 import re
 import os
 import random
+import unicodedata
 from . import pc_control
 from .code_executor import execute_code
+
+
+def _normalize(text: str) -> str:
+    """Lowercase + quita acentos + colapsa espacios. Sirve para que todos los
+    patterns funcionen sin acentos y cubran mas variaciones de STT.
+    Ejemplo: 'Búscame algo en YouTube' -> 'buscame algo en youtube'
+    """
+    if not text:
+        return ""
+    t = text.lower().strip()
+    # NFD: descompone caracteres acentuados; luego filtra diacriticos
+    t = unicodedata.normalize("NFD", t)
+    t = "".join(c for c in t if unicodedata.category(c) != "Mn")
+    # Colapsar espacios multiples
+    t = re.sub(r"\s+", " ", t)
+    return t
 
 
 class FastCommandDetector:
@@ -11,38 +28,67 @@ class FastCommandDetector:
     Solo los comandos que no necesitan razonamiento pasan por aqui.
     """
 
-    # Respuestas variadas para que no suene robotico
+    # Respuestas variadas, con personalidad tipo JARVIS — tono seco, britanico,
+    # con sarcasmo ocasional sutil. Mezcla de confirmaciones formales y
+    # comentarios laterales para que no suene robotico ni monocorde.
     RESPONSES = {
         "open": [
             "Enseguida, senor.",
-            "Abriendo ahora mismo.",
-            "En camino.",
-            "Listo, senor.",
             "Por supuesto.",
+            "A su disposicion.",
+            "Como desee.",
+            "Procedo.",
+            "Inmediatamente, senor.",
+            "Faltaba mas.",
+            "En ello.",
+            "Abriendo. Intentare contener mi entusiasmo.",
+            "Hecho. Si me permite el comentario, una eleccion predecible.",
+            "Como cada dia, senor.",
+            "A la orden.",
         ],
         "close": [
-            "Cerrando ahora.",
-            "Hecho, senor.",
-            "Cerrado.",
+            "Cerrando, senor.",
+            "Hecho.",
+            "Considereselo cerrado.",
+            "Por fin, diria yo.",
             "Listo.",
+            "Fuera de escena.",
+            "Cerrado. Su estabilidad mental, presumo, lo agradece.",
+            "A su voluntad, senor.",
+            "Asunto zanjado.",
         ],
         "media": [
+            "Como desee, senor.",
+            "Procedo.",
+            "A la orden.",
             "Hecho.",
-            "Listo, senor.",
             "Enseguida.",
+            "Sus gustos, senor. No los juzgo.",
+            "Reproduciendo.",
         ],
         "search": [
-            "Buscando ahora mismo.",
-            "Enseguida, senor.",
-            "Abriendo la busqueda.",
+            "Buscando, senor.",
+            "Indagando.",
+            "A ver que ha hecho la humanidad hoy al respecto.",
+            "Consultando.",
+            "Permitame.",
+            "Enseguida.",
+            "Investigando. Esperemos algo util.",
         ],
         "volume": [
-            "Volumen ajustado.",
-            "Listo, senor.",
+            "Volumen ajustado, senor.",
+            "Hecho.",
+            "Como prefiera.",
+            "Listo.",
+            "A su oido, senor.",
         ],
         "system": [
             "Hecho, senor.",
             "Ejecutado.",
+            "A su disposicion.",
+            "Procedo.",
+            "Considereselo hecho.",
+            "Como ordene.",
         ],
     }
 
@@ -53,23 +99,30 @@ class FastCommandDetector:
     # Nota: 'ponme' se omite aqui porque es ambiguo ("ponme una cancion" no es
     # abrir). El compound pattern ya lo captura cuando viene con "y pon/busca".
     _OPEN_VERBS = (
-        r"(?:abre|abreme|abrir|ejecuta|ejecutame|ejecutar|lanza|lanzame|lanzar|"
-        r"inicia|iniciame|iniciar|arranca|arrancame|arrancar|corre|correme|correr|"
+        r"(?:abre|abreme|abrir|abrime|abrila|abrilo|ejecuta|ejecutame|ejecutar|"
+        r"lanza|lanzame|lanzar|lanzalo|lanzala|inicia|iniciame|iniciar|iniciame|"
+        r"arranca|arrancame|arrancar|corre|correme|correr|"
         r"prende|prendeme|prender|enciende|enciendeme|encender|activa|activame|activar|"
         r"levanta|levantame|levantar|dame|sacame|abremela|abremelo|"
-        r"podrias\s+abrir|puedes\s+abrir|necesito|quiero)"
+        r"muestrame|mostrame|pasame|pone\s+a|pon\s+a|"
+        r"podrias\s+abrir|puedes\s+abrir|puedes\s+iniciar|necesito|quiero|quisiera|"
+        r"abre\s+por\s+favor|por\s+favor\s+abre|open)"
     )
     # Verbos sinonimos para cerrar
     _CLOSE_VERBS = (
-        r"(?:cierra|cierrame|cierralo|cierramela|cerrar|"
+        r"(?:cierra|cierrame|cierralo|cierramela|cerrar|cerrame|cerralo|"
         r"termina|terminame|terminar|finaliza|finalizame|finalizar|"
-        r"mata|matame|matar|kill|quita|quitame|quitar)"
+        r"mata|matame|matar|kill|quita|quitame|quitar|apaga(?!\s+(?:el|la|mi|pc))|"
+        r"close|saca|sacame)"
     )
     # Verbos sinonimos para reproducir (compuestos con spotify/youtube)
     _PLAY_VERBS = (
-        r"(?:pon|ponme|reproduce|reproducir|coloca|colocame|busca|buscame|play|"
-        r"escucha|escuchame|tocame|toca|tira|tirame|sueltame|suelta|dame|"
-        r"ponle|metele|cantame)"
+        r"(?:pon|ponme|ponle|ponelo|ponela|poneme|reproduce|reproduceme|reproducir|"
+        r"reprodu|coloca|colocame|colocalo|busca|buscame|buscalo|buscala|play|dale\s+play|"
+        r"escucha|escuchame|escuchalo|tocame|toca|tocala|tocalo|tira|tirame|"
+        r"sueltame|suelta|dame|metele|meteme|cantame|dale|"
+        r"ve|mira|miralo|mostrame|muestrame|abreme|abre|quiero\s+ver|"
+        r"quiero\s+escuchar|quiero\s+oir|hazme\s+sonar)"
     )
 
     # Patrones de comandos rapidos
@@ -91,11 +144,29 @@ class FastCommandDetector:
         (r"(?:pon|reproduce|play|coloca|ponme)\s+(.+?)\s+en\s+spotify", "_handle_spotify_search"),
         (r"en\s+spotify\s+(?:pon|reproduce|busca|play)\s+(.+)", "_handle_spotify_search"),
         (r"spotify\s+(?:pon|reproduce|busca|play)\s+(.+)", "_handle_spotify_search"),
+
+        # === BUSQUEDA/REPRODUCCION EN SITIOS WEB ESPECIFICOS ===
+        # "busca/reproduce/pon en <sitio> X"
+        (r"^(?:busca|buscar|buscame|buscalo|buscala|search|googlea|reproduce|reproduceme|reproducir|pon|ponme|ponle|coloca|colocame|play|muestrame|mostrame)\s+en\s+(youtube|google|github|twitter|x|reddit|netflix|amazon|mercadolibre|twitch|linkedin)\s+(.+)", "_handle_search_on_site"),
+        # "en youtube busca/pon/reproduce X", "youtube busca X"
+        (r"^(?:en\s+)?(youtube|github|twitter|reddit|netflix|amazon|twitch|linkedin|mercadolibre)\s+(?:busca|buscame|pon|ponme|reproduce|coloca|search|muestrame|mostrame)\s+(.+)", "_handle_search_on_site"),
+        # "busca/reproduce/pon X en <sitio>" (query antes del sitio)
+        (r"^(?:busca|buscar|buscame|buscalo|reproduce|reproduceme|pon|ponme|coloca|colocame|play)\s+(.+?)\s+en\s+(youtube|google|github|twitter|x|reddit|netflix|amazon|mercadolibre|twitch|linkedin)$", "_handle_search_on_site_reverse"),
+
+        # === BUSQUEDA WEB GENERICA (Google) ===
+        # "busca X", "busca en google X", "googlea X", "busca en internet X"
+        (r"^(?:busca|buscame|buscalo|buscala|search|googlea)\s+(?:en\s+(?:google|internet|la\s+web|la\s+red)\s+)?(.+)", "_handle_search"),
         # Media controls (inequivocos, no necesitan contexto)
         (r"(?:pon|reproduce|play|reproducir)\s+(?:la\s+)?musica$", "_handle_play"),
         (r"(?:pausa|pausar|pause|para|detener|deten|stop|detente)(?:\s+(?:la\s+)?(?:musica|cancion|reproduccion|todo))?$", "_handle_play"),
         (r"(?:siguiente|next|salta|skip)(?:\s+(?:cancion|track|tema))?$", "_handle_next"),
         (r"(?:anterior|previous|prev|atras)(?:\s+(?:cancion|track|tema))?$", "_handle_prev"),
+
+        # === REPRODUCIR X (sin plataforma explicita) — DECIDIR spotify/youtube ===
+        # "reproduce el regente", "pon bad bunny", "cantame una cancion de...", etc.
+        # Debe ir DESPUES de patrones spotify/youtube explicitos (ya capturados arriba)
+        # y DESPUES de "reproduce musica" (media play/pause).
+        (r"^(?:reproduce|reproduceme|reproducir|pon|ponme|ponle|coloca|colocame|play|cantame|escuchame|tocame)\s+(.+)", "_handle_play_smart"),
         # Volumen (inequivoco)
         (r"(?:sube|subir|subele|aumenta).+volumen.*?(\d+)?", "_handle_volume_up"),
         (r"(?:baja|bajar|bajale|reduce|disminuye).+volumen.*?(\d+)?", "_handle_volume_down"),
@@ -145,10 +216,13 @@ class FastCommandDetector:
         Retorna (handled: bool, response: str).
         Si handled es False, el mensaje debe ir a la IA.
         """
-        text = user_input.strip()
+        # Normalizar: lowercase + sin acentos + espacios colapsados. Esto
+        # garantiza que los patterns (todos sin acentos) cubran cualquier
+        # variante de STT o teclado ("Búscame", "BUSCAME", "buscame").
+        text = _normalize(user_input)
 
         # Quitar "jarvis" del inicio (el usuario puede decir "Jarvis abre spotify")
-        text_clean = re.sub(r'^(?:jarvis|hey\s+jarvis|oye\s+jarvis|oye|hey)[,.\s]*', '', text, flags=re.IGNORECASE).strip()
+        text_clean = re.sub(r'^(?:jarvis|hey\s+jarvis|oye\s+jarvis|oye|hey)[,.\s]*', '', text).strip()
         if text_clean:
             text = text_clean
 
@@ -201,17 +275,33 @@ class FastCommandDetector:
             return f"{self._random_response('open')} {target.capitalize()} abierto."
         return None  # Dejar que la IA maneje si no se pudo
 
+    # URLs de busqueda directa para sitios web conocidos — fallback garantizado
+    # que nunca depende de automatizar teclado.
+    _WEB_SEARCH_URLS = {
+        "youtube": "https://www.youtube.com/results?search_query={}",
+        "google": "https://www.google.com/search?q={}",
+        "github": "https://github.com/search?q={}",
+        "amazon": "https://www.amazon.com/s?k={}",
+        "mercadolibre": "https://listado.mercadolibre.com/{}",
+        "twitter": "https://twitter.com/search?q={}",
+        "x": "https://x.com/search?q={}",
+        "reddit": "https://www.reddit.com/search/?q={}",
+        "linkedin": "https://www.linkedin.com/search/results/all/?keywords={}",
+        "netflix": "https://www.netflix.com/search?q={}",
+        "twitch": "https://www.twitch.tv/search?term={}",
+    }
+
     def _handle_open_compound(self, match) -> str | None:
         """
         Maneja "abre/ejecuta <APP> y <VERBO> <CONTENIDO>" para CUALQUIER app.
-        Decide la accion correcta segun la app y el verbo:
-          - Spotify + play_verb -> spotify_search (Spotify se abre solo)
-          - Sitio web (youtube, github, etc.) + verb -> open_and_search
-          - App desktop (chrome, brave) + busca -> open app + search_web
-          - Cualquier app + escribe -> open app + type_text
-        Si no puede resolver, retorna None y deja al IA.
+
+        Nunca devuelve None cuando la app es reconocible: si la automatizacion
+        de teclado falla, caemos a una URL de busqueda directa (mas rapido y
+        100% fiable). Solo devuelve None para apps totalmente desconocidas
+        donde no se puede garantizar nada util sin IA.
         """
         from . import automation
+        import urllib.parse
         import time
 
         raw_app = match.group(1).strip().rstrip(",.")
@@ -247,27 +337,36 @@ class FastCommandDetector:
         if "spotify" in app_lower:
             return self._spotify_search_and_play(content)
 
-        # Sitios web conocidos (youtube, github, google, etc.) -> open_and_search
-        for key, url in self._WEB_KEYWORDS.items():
+        # Sitios web conocidos: URL directa de busqueda (100% fiable, <1s)
+        for key in self._WEB_SEARCH_URLS:
             if key in app_lower:
-                try:
-                    result = automation.open_and_search(url, content)
-                    if result.get("success"):
-                        return f"{self._random_response('open')} {key.capitalize()} abierto, buscando '{content}'."
-                except Exception:
-                    pass
-                return None
+                url = self._WEB_SEARCH_URLS[key].format(urllib.parse.quote(content))
+                result = pc_control.open_website(url)
+                if result.get("success"):
+                    return f"{self._random_response('open')} {key.capitalize()} abierto, buscando '{content}'."
+                return f"No pude abrir {key} para buscar '{content}'."
 
-        # App desktop (chrome, brave, firefox) + busca -> abrir y buscar en Google
-        if verb in ("busca", "buscame", "search"):
-            open_result = pc_control.find_and_open_app(app)
+        # App desktop (chrome, brave, firefox, edge) + busca/ve -> abrir app y
+        # navegar a Google con la query.
+        browser_apps = ("chrome", "brave", "firefox", "edge", "opera", "vivaldi", "tor")
+        is_browser = any(b in app_lower for b in browser_apps)
+        if is_browser or verb in ("busca", "buscame", "buscalo", "buscala", "search", "ve", "mira", "miralo"):
+            # Intentar abrir la app; si falla, abrir la busqueda en navegador por defecto
+            open_result = pc_control.find_and_open_app(app) if is_browser else {"success": False}
             if open_result.get("success"):
-                time.sleep(1.0)
-                pc_control.search_web(content)
-                return f"{self._random_response('search')} {app.capitalize()} abierto, buscando '{content}'."
-            return None
+                time.sleep(0.8)
+            pc_control.search_web(content)
+            app_label = app.capitalize() if is_browser else "navegador"
+            return f"{self._random_response('search')} {app_label} abierto, buscando '{content}'."
 
-        # No supimos resolver el compuesto -> dejar al IA
+        # Si el verbo es play-like y la "app" parece un servicio de musica/video
+        # desconocido, caer a YouTube como fallback razonable.
+        if verb in ("pon", "ponme", "reproduce", "reproduceme", "reproducir", "play", "dale", "cantame"):
+            url = self._WEB_SEARCH_URLS["youtube"].format(urllib.parse.quote(f"{content} {app}"))
+            pc_control.open_website(url)
+            return f"{self._random_response('media')} Buscando '{content}' en YouTube."
+
+        # App desconocida + verbo ambiguo -> dejar al IA (que clasifique y decida)
         return None
 
     def _handle_whatsapp_send(self, match) -> str | None:
@@ -296,8 +395,44 @@ class FastCommandDetector:
         for prefix in ["en google ", "en internet ", "en la web "]:
             if query.startswith(prefix):
                 query = query[len(prefix):]
-        result = pc_control.search_web(query)
-        return f"{self._random_response('search')} Buscando: {query}"
+        # Si queda vacio (el usuario solo dijo "busca en internet"), fallback
+        if not query:
+            return "¿Que desea que busque, senor?"
+        pc_control.search_web(query)
+        return f"{self._random_response('search')} Buscando: {query}."
+
+    def _handle_search_on_site(self, match) -> str:
+        """Busca en un sitio web especifico usando URL directa de busqueda.
+        Grupo 1: sitio (youtube, google, etc.) — Grupo 2: query.
+        """
+        import urllib.parse
+        site = match.group(1).strip().lower()
+        query = match.group(2).strip().rstrip(".,;:!?")
+        if not query:
+            return f"¿Que desea buscar en {site.capitalize()}, senor?"
+        url_template = self._WEB_SEARCH_URLS.get(site)
+        if not url_template:
+            # Fallback a Google
+            pc_control.search_web(f"{query} site:{site}.com")
+            return f"{self._random_response('search')} Buscando '{query}' en {site}."
+        url = url_template.format(urllib.parse.quote(query))
+        pc_control.open_website(url)
+        return f"{self._random_response('search')} Buscando '{query}' en {site.capitalize()}."
+
+    def _handle_search_on_site_reverse(self, match) -> str:
+        """'busca X en youtube' — query primero, sitio segundo."""
+        import urllib.parse
+        query = match.group(1).strip().rstrip(".,;:!?")
+        site = match.group(2).strip().lower()
+        if not query:
+            return f"¿Que desea buscar en {site.capitalize()}, senor?"
+        url_template = self._WEB_SEARCH_URLS.get(site)
+        if not url_template:
+            pc_control.search_web(f"{query} site:{site}.com")
+            return f"{self._random_response('search')} Buscando '{query}' en {site}."
+        url = url_template.format(urllib.parse.quote(query))
+        pc_control.open_website(url)
+        return f"{self._random_response('search')} Buscando '{query}' en {site.capitalize()}."
 
     def _handle_play(self, match) -> str:
         pc_control.media_play_pause()
@@ -399,6 +534,35 @@ class FastCommandDetector:
             return self._spotify_search_and_play(query)
         return None
 
+    def _handle_play_smart(self, match) -> str | None:
+        """Reproduce X sin plataforma — decide Spotify vs YouTube segun estado.
+
+        Logica:
+          - Si Spotify esta corriendo -> buscar y reproducir ahi.
+          - Si no -> abrir URL directa de YouTube con la busqueda.
+        Asi el usuario no tiene que especificar la plataforma cada vez.
+        """
+        import urllib.parse
+        raw = match.group(1).strip().rstrip(".,;:!?")
+        # "reproduce musica" ya lo cubre _handle_play (con anchor $). Si llega
+        # aqui sin mas texto, tratarlo como play/pause.
+        if not raw or raw.lower() in ("musica", "la musica", "music"):
+            pc_control.media_play_pause()
+            return self._random_response("media")
+
+        # Limpiar prefijos ruido para no buscar "la cancion llamada X"
+        query = self._clean_spotify_query(raw)
+        if not query:
+            return None
+
+        if pc_control._is_spotify_running():
+            return self._spotify_search_and_play(query)
+
+        # Fallback: YouTube (URL directa, 100% fiable)
+        url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
+        pc_control.open_website(url)
+        return f"{self._random_response('media')} Spotify no esta abierto; buscando '{query}' en YouTube."
+
     def _handle_volume_up(self, match) -> str:
         level = match.group(1)
         if level:
@@ -449,25 +613,44 @@ class FastCommandDetector:
         from config import Config
         name = Config.ASSISTANT_NAME
         intros = [
-            f"Soy {name}, su asistente de inteligencia artificial personal. Estoy aqui para lo que necesite, senor. Puedo abrir aplicaciones, buscar en internet, controlar su equipo y mucho mas.",
-            f"Me llamo {name}, senor. Soy su sistema de asistencia virtual inspirado en la IA de Tony Stark. Controlo su PC, busco informacion y ejecuto lo que me pida.",
-            f"{name} a su servicio. Soy una inteligencia artificial disenada para asistirle en todo: desde abrir Spotify hasta buscar noticias o bloquear su equipo. Pidame lo que sea.",
-            f"Mi nombre es {name}. Soy su mayordomo digital, senor. Gestiono aplicaciones, respondo preguntas, busco en la web y controlo su sistema. Estoy listo para servirle.",
-            f"Soy {name}, su IA personal. Piense en mi como su asistente de confianza: rapido, eficiente y siempre disponible. Digame en que puedo ayudarle.",
+            f"{name}, senor. Su mayordomo digital. Una inteligencia artificial a su entera disposicion.",
+            f"Soy {name}. Discretamente diseñado para facilitarle la vida. Pidame lo que sea razonable, y algunas cosas que no lo sean.",
+            f"Me llamo {name}, senor. Inspirado en cierto mayordomo digital de Malibu, aunque con mejor sentido del humor, si me permite.",
+            f"{name} a su servicio. Abro aplicaciones, consulto informacion, controlo su equipo. Y escucho, cuando usted lo necesita.",
+            f"Soy {name}. Piense en mi como su asistente personal, con la diferencia de que yo no duermo ni pido vacaciones, senor.",
+            f"{name}, senor. Mi proposito: ejecutar sus ordenes con discrecion y eficiencia. El resto es musica de fondo.",
         ]
         return random.choice(intros)
 
     def _handle_lock(self, match) -> str:
         pc_control.lock_pc()
-        return "Bloqueando el equipo, senor."
+        options = [
+            "Bloqueando, senor. Hasta su regreso.",
+            "Equipo asegurado.",
+            "Cerrando puertas. Que tenga buen dia, senor.",
+            "Bloqueado. No deje esperar demasiado.",
+        ]
+        return random.choice(options)
 
     def _handle_shutdown(self, match) -> str:
         result = pc_control.shutdown_pc("shutdown")
-        return f"Entendido, senor. {result['message']}"
+        prefixes = [
+            "Como ordene, senor.",
+            "Procedo con el apagado.",
+            "Muy bien, senor.",
+            "Entendido.",
+        ]
+        return f"{random.choice(prefixes)} {result['message']}"
 
     def _handle_restart(self, match) -> str:
         result = pc_control.shutdown_pc("restart")
-        return f"Entendido, senor. {result['message']}"
+        prefixes = [
+            "Reiniciando. De nuevo.",
+            "Muy bien, senor.",
+            "A la orden.",
+            "Procedo con el reinicio.",
+        ]
+        return f"{random.choice(prefixes)} {result['message']}"
 
     def _handle_sleep(self, match) -> str:
         result = pc_control.shutdown_pc("sleep")

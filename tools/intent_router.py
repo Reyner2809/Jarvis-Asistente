@@ -96,7 +96,7 @@ class IntentRouter:
                 ],
                 "stream": False,
                 "options": {
-                    "num_predict": 100,
+                    "num_predict": 80,
                     "temperature": 0.1,
                 },
             }).encode("utf-8")
@@ -107,7 +107,9 @@ class IntentRouter:
                 headers={"Content-Type": "application/json"},
             )
 
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            # 6s es suficiente para llama3.2 en HW razonable; si se atasca,
+            # no bloqueamos al usuario y cae al siguiente path.
+            with urllib.request.urlopen(req, timeout=6) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
 
             raw = data["message"]["content"].strip()

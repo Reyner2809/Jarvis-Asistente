@@ -1,11 +1,19 @@
 import subprocess
 import os
 import sys
+import glob
 import datetime
 import platform
 from rich.console import Console
 
 console = Console()
+
+
+def _first_glob(pattern: str) -> str | None:
+    """Resuelve un patron glob y devuelve la primera coincidencia, o None."""
+    matches = glob.glob(pattern)
+    return matches[0] if matches else None
+
 
 # Aplicaciones conocidas y sus posibles rutas en Windows
 KNOWN_APPS = {
@@ -70,7 +78,77 @@ KNOWN_APPS = {
     "paint": ["mspaint.exe"],
     "configuracion": ["ms-settings:"],
     "settings": ["ms-settings:"],
+    # === Juegos y launchers comunes ===
+    "roblox": [
+        # El launcher elige la version instalada mas reciente
+        os.path.expandvars(r"%LOCALAPPDATA%\Roblox\Versions\RobloxPlayerLauncher.exe"),
+        _first_glob(os.path.expandvars(r"%LOCALAPPDATA%\Roblox\Versions\version-*\RobloxPlayerBeta.exe")) or "",
+        # Si el usuario instalo Roblox desde Microsoft Store
+        "roblox:",
+    ],
+    "steam": [
+        r"C:\Program Files (x86)\Steam\Steam.exe",
+        r"C:\Program Files\Steam\Steam.exe",
+    ],
+    "epic games": [
+        r"C:\Program Files (x86)\Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe",
+        r"C:\Program Files\Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe",
+    ],
+    "epic": [
+        r"C:\Program Files (x86)\Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe",
+    ],
+    "minecraft": [
+        os.path.expandvars(r"%APPDATA%\.minecraft\launcher\Minecraft.exe"),
+        r"C:\Program Files (x86)\Minecraft Launcher\MinecraftLauncher.exe",
+        r"C:\Program Files\Minecraft Launcher\MinecraftLauncher.exe",
+        "minecraft:",
+    ],
+    "valorant": [
+        r"C:\Riot Games\Riot Client\RiotClientServices.exe",
+    ],
+    "league of legends": [
+        r"C:\Riot Games\Riot Client\RiotClientServices.exe",
+        r"C:\Riot Games\League of Legends\LeagueClient.exe",
+    ],
+    "lol": [
+        r"C:\Riot Games\Riot Client\RiotClientServices.exe",
+    ],
+    "riot": [
+        r"C:\Riot Games\Riot Client\RiotClientServices.exe",
+    ],
+    "battle.net": [
+        r"C:\Program Files (x86)\Battle.net\Battle.net Launcher.exe",
+    ],
+    "battlenet": [
+        r"C:\Program Files (x86)\Battle.net\Battle.net Launcher.exe",
+    ],
+    "obs": [
+        r"C:\Program Files\obs-studio\bin\64bit\obs64.exe",
+    ],
+    "obs studio": [
+        r"C:\Program Files\obs-studio\bin\64bit\obs64.exe",
+    ],
+    "ubisoft": [
+        r"C:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\upc.exe",
+    ],
+    "ubisoft connect": [
+        r"C:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\upc.exe",
+    ],
+    "zoom": [
+        os.path.expandvars(r"%APPDATA%\Zoom\bin\Zoom.exe"),
+    ],
+    "teams": [
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Teams\current\Teams.exe"),
+    ],
+    "onedrive": [
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\OneDrive\OneDrive.exe"),
+    ],
+    "spotify web": ["https://open.spotify.com/"],
+    "twitch": ["https://www.twitch.tv/"],
 }
+# Limpiar entradas vacias (por si un glob no resolvio)
+for _k in list(KNOWN_APPS.keys()):
+    KNOWN_APPS[_k] = [p for p in KNOWN_APPS[_k] if p]
 
 
 _APP_NAME_NOISE_PREFIXES = (
@@ -119,7 +197,13 @@ def open_application(app_name: str) -> dict:
         paths = KNOWN_APPS[app_key]
         for path in paths:
             try:
-                if path.startswith("ms-"):
+                # URI de Windows (ms-settings:, roblox:, minecraft:, etc.)
+                if ":" in path and not os.path.isabs(path) and not path.startswith(("http://", "https://")):
+                    os.startfile(path)
+                    return {"success": True, "message": f"Se abrio {app_key}"}
+
+                # URL web -> navegador
+                if path.startswith(("http://", "https://")):
                     os.startfile(path)
                     return {"success": True, "message": f"Se abrio {app_key}"}
 
@@ -361,29 +445,59 @@ def find_and_open_app(app_name: str) -> dict:
 
     best_match = None
     best_score = 0
+    # Umbral minimo para aceptar un match parcial — evita que "X" (Twitter)
+    # gane por contener la letra "x" sobre una busqueda de "roblox", o que
+    # "spotify" gane sobre "spot".
+    MIN_SCORE = 60
+    # app_key muy corto (<3) solo acepta match EXACTO o startswith — con 1-2
+    # letras el matching parcial es basura y abre cualquier cosa.
+    require_strict = len(app_key) < 3
 
     for search_dir in search_dirs:
         if not os.path.exists(search_dir):
             continue
         for root, dirs, files in os.walk(search_dir):
             for f in files:
-                if f.lower().endswith(('.lnk', '.exe', '.url')):
-                    name_lower = f.lower().replace('.lnk', '').replace('.exe', '').replace('.url', '')
-                    # Match exacto
-                    if app_key == name_lower:
-                        best_match = os.path.join(root, f)
-                        best_score = 100
-                        break
-                    # Match parcial
-                    if app_key in name_lower or name_lower in app_key:
-                        score = len(app_key) / max(len(name_lower), 1) * 50
-                        if score > best_score:
-                            best_match = os.path.join(root, f)
-                            best_score = score
+                if not f.lower().endswith(('.lnk', '.exe', '.url')):
+                    continue
+                name_lower = f.lower().replace('.lnk', '').replace('.exe', '').replace('.url', '')
+                # Match exacto gana siempre
+                if app_key == name_lower:
+                    best_match = os.path.join(root, f)
+                    best_score = 100
+                    break
+                if require_strict:
+                    continue
+                # Prefix match: "chrome" matchea "Google Chrome" si la palabra
+                # app_key aparece como token al inicio o despues de un separador.
+                # Usar limites de palabra ayuda a no matchear dentro de otras.
+                tokens = name_lower.replace('-', ' ').replace('_', ' ').split()
+                if not tokens:
+                    continue
+                # Score alto si app_key aparece al inicio o como token entero
+                if tokens[0] == app_key:
+                    score = 90
+                elif app_key in tokens:
+                    score = 85
+                elif name_lower.startswith(app_key):
+                    # "robloxplayer" cuando buscamos "roblox"
+                    score = 80
+                elif app_key in name_lower and len(app_key) >= 4:
+                    # substring match solo si la query tiene >=4 chars
+                    overlap = len(app_key) / max(len(name_lower), 1)
+                    score = int(60 + overlap * 20)  # 60..80
+                elif name_lower in app_key and len(name_lower) >= 4:
+                    overlap = len(name_lower) / max(len(app_key), 1)
+                    score = int(60 + overlap * 15)
+                else:
+                    continue
+                if score > best_score:
+                    best_match = os.path.join(root, f)
+                    best_score = score
             if best_score == 100:
                 break
 
-    if best_match:
+    if best_match and best_score >= MIN_SCORE:
         try:
             os.startfile(best_match)
             return {"success": True, "message": f"Se abrio {app_key}"}
