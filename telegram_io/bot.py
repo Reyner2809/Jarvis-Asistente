@@ -30,6 +30,36 @@ console = Console()
 log = logging.getLogger("jarvis.telegram")
 
 
+def _get_ffmpeg_exe() -> str:
+    """Devuelve la ruta a un binario de ffmpeg utilizable.
+
+    Prioriza ffmpeg del PATH del sistema. Si no existe, cae al bundled de
+    imageio_ffmpeg (pip package) que trae un ffmpeg portable sin necesidad
+    de admin. Cachea el resultado para no re-detectar en cada llamada.
+    """
+    cached = getattr(_get_ffmpeg_exe, "_cached", None)
+    if cached:
+        return cached
+    # 1. ffmpeg en PATH
+    import shutil
+    sys_ffmpeg = shutil.which("ffmpeg")
+    if sys_ffmpeg:
+        _get_ffmpeg_exe._cached = sys_ffmpeg
+        return sys_ffmpeg
+    # 2. bundled via imageio-ffmpeg (pip install imageio-ffmpeg)
+    try:
+        import imageio_ffmpeg
+        bundled = imageio_ffmpeg.get_ffmpeg_exe()
+        if bundled and os.path.exists(bundled):
+            _get_ffmpeg_exe._cached = bundled
+            return bundled
+    except Exception:
+        pass
+    # 3. Nada disponible: devolver el nombre 'ffmpeg' para que el
+    # subprocess.run lance FileNotFoundError con un mensaje claro.
+    return "ffmpeg"
+
+
 class TelegramIO:
     """
     Adaptador de Telegram para Jarvis.
@@ -195,7 +225,7 @@ class TelegramIO:
                 if sys.platform == "win32":
                     kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
                 subprocess.run(
-                    ["ffmpeg", "-y", "-loglevel", "error",
+                    [_get_ffmpeg_exe(), "-y", "-loglevel", "error",
                      "-i", mp3_path,
                      "-c:a", "libopus", "-b:a", "32k",
                      "-ar", "48000", "-ac", "1",
@@ -500,14 +530,14 @@ class TelegramIO:
                 if sys.platform == "win32":
                     kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
                 subprocess.run(
-                    ["ffmpeg", "-y", "-loglevel", "error",
+                    [_get_ffmpeg_exe(), "-y", "-loglevel", "error",
                      "-i", oga_path, "-ar", "16000", "-ac", "1", wav_path],
                     **kwargs,
                 )
             except FileNotFoundError:
                 raise RuntimeError(
-                    "ffmpeg no esta instalado. Instala ffmpeg para soporte de voz "
-                    "(Windows: descarga de ffmpeg.org, Linux: apt install ffmpeg)."
+                    "ffmpeg no esta instalado. Ejecute: pip install imageio-ffmpeg "
+                    "(o instale ffmpeg del sistema desde ffmpeg.org)."
                 )
             except subprocess.CalledProcessError as e:
                 err = (e.stderr or b"").decode(errors="ignore").strip()
