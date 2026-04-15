@@ -131,6 +131,11 @@ class TelegramIO:
             return False
 
         try:
+            # Silenciar logger interno de telebot — sus stack traces son ruido
+            # cuando la red parpadea (ConnectionResetError 10054, ReadTimeout).
+            # El polling auto-recupera; solo nos interesan errores realmente
+            # fatales (lo dejamos en CRITICAL).
+            logging.getLogger("TeleBot").setLevel(logging.CRITICAL)
             self.bot = telebot.TeleBot(self.token, parse_mode=None)
             # Validar el token contra la API
             me = self.bot.get_me()

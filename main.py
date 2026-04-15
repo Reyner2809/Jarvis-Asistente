@@ -52,6 +52,9 @@ INTERNET_PATTERNS = [
     r"(?:busca|buscame|dime)\s+(?:informacion|info)\s+(?:sobre|de|del)",
     r"(?:que|qué)\s+(?:sabes|hay)\s+(?:sobre|de|del|acerca)",
     r"(?:investiga|averigua|encuentra)\s+(?:sobre|de|del|acerca|info)",
+    # "averigua/investiga + interrogativo X" — ej "averigua que es X",
+    # "investiga como funciona Y", "averigua con que lenguaje esta hecho Z"
+    r"(?:investiga|averigua|encuentra|consulta)\s+(?:que|qué|cual|cuál|como|cómo|cuando|cuándo|donde|dónde|por\s*que|porqué|quien|quién|cuanto|cuánto|con\s+(?:que|qué)|en\s+(?:que|qué)|de\s+(?:que|qué)|para\s+(?:que|qué))",
     # "averigua/investiga/busca en internet X", "en google X", "en la web X"
     r"(?:investiga|averigua|encuentra|busca|buscame|dime|consulta)\s+(?:en\s+)?(?:internet|la\s+web|google|la\s+red)",
     # Personas/eventos/lugares actuales

@@ -1,3 +1,4 @@
+import time
 from rich.console import Console
 from .claude_provider import ClaudeProvider
 from .openai_provider import OpenAIProvider
@@ -6,6 +7,9 @@ from .ollama_provider import OllamaProvider
 from config import Config
 
 console = Console()
+
+# Cuanto tiempo (segundos) marcamos un provider como "en cooldown" tras 429
+_RATELIMIT_COOLDOWN_SEC = 300  # 5 min
 
 
 class ProviderManager:
@@ -20,6 +24,22 @@ class ProviderManager:
         }
         self._current = None
         self._fallback_order = ["claude", "openai", "gemini", "ollama"]
+        # provider_name -> timestamp hasta cuando esta en cooldown
+        self._cooldown_until: dict[str, float] = {}
+
+    def _is_in_cooldown(self, name: str) -> bool:
+        until = self._cooldown_until.get(name, 0)
+        return time.time() < until
+
+    def _put_in_cooldown(self, name: str, reason: str = "rate-limit"):
+        self._cooldown_until[name] = time.time() + _RATELIMIT_COOLDOWN_SEC
+        console.print(f"  [yellow]{name.upper()} en cooldown {_RATELIMIT_COOLDOWN_SEC}s ({reason})[/yellow]")
+
+    @staticmethod
+    def _is_quota_error(err: Exception) -> bool:
+        """Detecta errores de rate-limit / quota / 429."""
+        msg = str(err).lower()
+        return any(s in msg for s in ("429", "quota", "rate", "resource_exhausted", "too many"))
 
     @property
     def current_provider_name(self) -> str:
@@ -53,6 +73,8 @@ class ProviderManager:
             provider = self._providers[provider_name]
             if not provider.is_available():
                 continue
+            if self._is_in_cooldown(provider_name):
+                continue
 
             try:
                 if provider != self._current:
@@ -73,9 +95,12 @@ class ProviderManager:
 
             except Exception as e:
                 last_error = e
-                console.print(
-                    f"  [red]Error con {provider_name.upper()}: {e}[/red]"
-                )
+                if self._is_quota_error(e):
+                    self._put_in_cooldown(provider_name, "429/quota")
+                else:
+                    console.print(
+                        f"  [red]Error con {provider_name.upper()}: {e}[/red]"
+                    )
                 continue
 
         raise ConnectionError(
@@ -111,10 +136,14 @@ class ProviderManager:
             provider = self._providers[provider_name]
             if not provider.is_available():
                 continue
+            if self._is_in_cooldown(provider_name):
+                continue
             try:
                 return provider.chat(messages, search_prompt)
             except Exception as e:
                 last_error = e
+                if self._is_quota_error(e):
+                    self._put_in_cooldown(provider_name, "429/quota")
                 continue
 
         return None
@@ -131,6 +160,8 @@ class ProviderManager:
             if not provider.is_available():
                 continue
             if not hasattr(provider, "agent_chat"):
+                continue
+            if self._is_in_cooldown(provider_name):
                 continue
             try:
                 if provider != self._current:
@@ -150,7 +181,10 @@ class ProviderManager:
                 )
             except Exception as e:
                 last_error = e
-                console.print(f"  [red]Error con {provider_name.upper()}: {e}[/red]")
+                if self._is_quota_error(e):
+                    self._put_in_cooldown(provider_name, "429/quota")
+                else:
+                    console.print(f"  [red]Error con {provider_name.upper()}: {e}[/red]")
                 continue
         raise ConnectionError(f"Agent loop fallo en todos los proveedores: {last_error}")
 
