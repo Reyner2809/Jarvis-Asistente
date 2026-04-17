@@ -45,11 +45,15 @@ class SpeechToText:
         self._listener_thread = None
         self._stop_event = threading.Event()
 
-        # Ajustes de sensibilidad
+        # Ajustes de sensibilidad — optimizados para baja latencia.
+        # pause_threshold mas corto (0.6s) hace que el reconocimiento dispare
+        # mas rapido cuando el usuario termina de hablar, recortando ~0.6s
+        # del tiempo total entre comando y ejecucion.
         self._recognizer.energy_threshold = 200
         self._recognizer.dynamic_energy_threshold = True
         self._recognizer.dynamic_energy_adjustment_damping = 0.15
-        self._recognizer.pause_threshold = 1.2
+        self._recognizer.pause_threshold = 0.6
+        self._recognizer.non_speaking_duration = 0.4
 
     def initialize(self) -> bool:
         try:

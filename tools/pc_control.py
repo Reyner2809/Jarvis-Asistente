@@ -303,15 +303,21 @@ def get_system_info() -> dict:
 
 
 def get_datetime() -> dict:
-    """Obtiene la fecha y hora actual."""
+    """Obtiene la fecha y hora actual en espanol."""
+    _dias = ['Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado', 'Domingo']
+    _meses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+              'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
     now = datetime.datetime.now()
+    dia = _dias[now.weekday()]
+    mes = _meses[now.month - 1]
+    fecha_str = f"{dia} {now.day} de {mes} de {now.year}, {now.strftime('%I:%M %p')}"
     return {
         "success": True,
-        "message": now.strftime("%A %d de %B de %Y, %I:%M %p"),
+        "message": fecha_str,
         "data": {
             "date": now.strftime("%Y-%m-%d"),
             "time": now.strftime("%H:%M:%S"),
-            "day": now.strftime("%A"),
+            "day": dia,
         }
     }
 

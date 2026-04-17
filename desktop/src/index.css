@@ -1,0 +1,308 @@
+/* Fuentes bundled localmente — 100% offline, no dependen de Google Fonts CDN */
+@import '@fontsource/inter/300.css';
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================
+   CSS vars runtime — src/lib/theme.js las sobreescribe cuando
+   el usuario cambia de color.
+   ========================================================== */
+:root {
+  --accent:       hsl(350, 90%, 58%);
+  --accent-muted: hsla(350, 90%, 58%, 0.12);
+  --accent-glow:  hsla(350, 90%, 58%, 0.35);
+
+  /* Audio analyzer -> CSS vars (actualizadas por lib/audio-player.js).
+     Cada banda drive una parte distinta del orbe -> efecto Siri (blobs
+     reaccionando autonomamente a diferentes frecuencias de la voz). */
+  --audio-level:     0;  /* nivel global (promedio ponderado) */
+  --audio-bass:      0;  /* 80-250Hz  : b1 grande */
+  --audio-low:       0;  /* 250-500Hz : b2 */
+  --audio-mid:       0;  /* 500-1500Hz: b3 */
+  --audio-upper-mid: 0;  /* 1.5-4kHz  : b4 */
+  --audio-treble:    0;  /* 4-10kHz   : b5 pequeno */
+
+  /* Fase global de la onda que recorre el anillo de puntos (0..360deg). */
+  --wave-phase: 0deg;
+
+  --blob-1: hsl(350, 90%, 58%);
+  --blob-2: hsl(350, 85%, 70%);
+  --blob-3: hsl(350, 75%, 65%);
+  --blob-4: hsl(350, 90%, 60%);
+  --blob-5: hsl(350, 95%, 72%);
+
+  /* Orb palette — cyan / magenta fijo (independiente del theme accent) */
+  --orb-cyan:         hsl(190, 100%, 60%);
+  --orb-magenta:      hsl(295, 100%, 68%);
+  --orb-cyan-soft:    hsla(190, 100%, 60%, 0.6);
+  --orb-magenta-soft: hsla(295, 100%, 68%, 0.6);
+  --orb-glow-1:       hsla(190, 100%, 60%, 0.25);
+  --orb-glow-2:       hsla(295, 100%, 68%, 0.20);
+
+  --ok:   hsl(145, 70%, 50%);
+  --warn: hsl(38, 95%, 55%);
+  --err:  hsl(0, 80%, 60%);
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: hsl(230, 10%, 4%);
+  color: hsl(220, 15%, 96%);
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: hsl(230, 10%, 22%); border-radius: 3px; }
+
+/* ==========================================================
+   Orb — Flowing Energy Sphere  (cyan / magenta)
+   ========================================================== */
+.orb {
+  position: absolute; inset: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  background: radial-gradient(circle at 50% 50%,
+    hsl(220, 25%, 10%) 0%,
+    hsl(220, 30%, 4%) 60%,
+    hsl(220, 35%, 2%) 100%);
+  box-shadow:
+    0 0 50px var(--orb-glow-1),
+    0 0 80px var(--orb-glow-2),
+    inset 0 0 30px rgba(0, 0, 0, 0.7);
+  animation: orb-breathe 6s ease-in-out infinite;
+}
+@keyframes orb-breathe {
+  50% { transform: scale(1.015); }
+}
+
+/* Interior: contiene swirls + blobs. Blur alto para mezcla fluida. */
+.orb-inner {
+  position: absolute; inset: -15%;
+  filter: blur(20px) saturate(1.4);
+  mix-blend-mode: screen;
+  opacity: 0.92;
+  transform:
+    scale(calc(1 + var(--audio-level, 0) * 0.08))
+    rotate(calc(var(--wave-phase, 0deg) * 0.15));
+  transition: transform 0.08s linear, filter 0.12s linear;
+}
+
+/* ========== Swirl layers — gradientes radiales que rotan para
+   crear bandas fluidas cyan/magenta tipo marmol liquido ========== */
+.swirl {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+}
+.swirl.swirl-1 {
+  background:
+    radial-gradient(ellipse 130% 45% at 25% 35%, var(--orb-cyan) 0%, transparent 55%),
+    radial-gradient(ellipse 130% 45% at 75% 70%, var(--orb-magenta) 0%, transparent 55%);
+  animation: swirl-a 4s ease-in-out infinite alternate;
+}
+.swirl.swirl-2 {
+  background:
+    radial-gradient(ellipse 110% 38% at 65% 25%, var(--orb-magenta-soft) 0%, transparent 50%),
+    radial-gradient(ellipse 110% 38% at 35% 75%, var(--orb-cyan-soft) 0%, transparent 50%);
+  animation: swirl-b 5.5s ease-in-out infinite alternate-reverse;
+  opacity: 0.75;
+}
+.swirl.swirl-3 {
+  background:
+    radial-gradient(ellipse 90% 30% at 50% 45%, rgba(255,255,255,0.35) 0%, transparent 40%),
+    radial-gradient(ellipse 120% 35% at 40% 55%, var(--orb-cyan-soft) 0%, transparent 45%),
+    radial-gradient(ellipse 120% 35% at 60% 40%, var(--orb-magenta-soft) 0%, transparent 45%);
+  animation: swirl-c 7s ease-in-out infinite alternate;
+  opacity: 0.5;
+}
+@keyframes swirl-a {
+  0%   { transform: rotate(-25deg) scaleX(0.92); }
+  50%  { transform: rotate(10deg) scaleX(1.08); }
+  100% { transform: rotate(35deg) scaleX(0.95); }
+}
+@keyframes swirl-b {
+  0%   { transform: rotate(40deg) scaleY(1.08); }
+  50%  { transform: rotate(-15deg) scaleY(0.92); }
+  100% { transform: rotate(-30deg) scaleY(1.1); }
+}
+@keyframes swirl-c {
+  0%   { transform: rotate(15deg) scale(0.95); }
+  50%  { transform: rotate(-25deg) scale(1.12); }
+  100% { transform: rotate(30deg) scale(0.92); }
+}
+
+/* ========== Blobs — la ENERGIA del orbe.
+   En speaking, JS les aplica translate y scale enormes para que
+   se DESBORDEN mas alla del circulo. El overflow: visible del
+   .orb en speaking permite que se vean fuera. ========== */
+.blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(6px);
+  will-change: translate, scale, transform;
+}
+.blob.b1 {
+  width: 160px; height: 100px;
+  background: radial-gradient(ellipse, var(--orb-cyan) 0%, transparent 65%);
+  top: 15%; left: 8%;
+  animation: orbit-a 6s ease-in-out infinite;
+}
+.blob.b2 {
+  width: 140px; height: 85px;
+  background: radial-gradient(ellipse, var(--orb-magenta) 0%, transparent 65%);
+  top: 50%; left: 52%;
+  animation: orbit-b 8s ease-in-out infinite;
+}
+.blob.b3 {
+  width: 130px; height: 80px;
+  background: radial-gradient(ellipse, var(--orb-cyan-soft) 0%, transparent 65%);
+  top: 48%; left: 10%;
+  animation: orbit-c 7s ease-in-out infinite;
+}
+.blob.b4 {
+  width: 120px; height: 75px;
+  background: radial-gradient(ellipse, var(--orb-magenta-soft) 0%, transparent 65%);
+  top: 20%; left: 55%;
+  animation: orbit-d 9s ease-in-out infinite;
+}
+.blob.b5 {
+  width: 110px; height: 70px;
+  background: radial-gradient(ellipse, rgba(255,255,255,0.45) 0%, transparent 55%);
+  top: 38%; left: 30%;
+  animation: orbit-e 10s ease-in-out infinite;
+}
+
+@keyframes orbit-a {
+  0%   { translate: 0 0; }
+  25%  { translate: 50px 30px; }
+  50%  { translate: 30px 60px; }
+  75%  { translate: -20px 40px; }
+  100% { translate: 0 0; }
+}
+@keyframes orbit-b {
+  0%   { translate: 0 0; }
+  20%  { translate: -40px -35px; }
+  40%  { translate: -60px 15px; }
+  60%  { translate: -15px 40px; }
+  80%  { translate: 25px 8px; }
+  100% { translate: 0 0; }
+}
+@keyframes orbit-c {
+  0%   { translate: 0 0; }
+  30%  { translate: 45px -50px; }
+  60%  { translate: 15px -25px; }
+  85%  { translate: -35px -15px; }
+  100% { translate: 0 0; }
+}
+@keyframes orbit-d {
+  0%   { translate: 0 0; }
+  25%  { translate: -35px 50px; }
+  50%  { translate: 25px 60px; }
+  75%  { translate: 40px -8px; }
+  100% { translate: 0 0; }
+}
+@keyframes orbit-e {
+  0%   { translate: 0 0; }
+  33%  { translate: -50px 35px; }
+  66%  { translate: 40px 50px; }
+  100% { translate: 0 0; }
+}
+
+/* ========== Glass highlight ========== */
+.orb-glass {
+  position: absolute;
+  top: 8%; left: 12%;
+  width: 50%; height: 35%;
+  background: radial-gradient(ellipse, rgba(255,255,255,0.10) 0%, transparent 70%);
+  border-radius: 50%;
+  filter: blur(10px);
+  pointer-events: none;
+  animation: glass-drift 14s ease-in-out infinite;
+}
+@keyframes glass-drift {
+  0%, 100% { transform: translate(0, 0); opacity: 0.7; }
+  50%      { transform: translate(10px, 6px); opacity: 0.9; }
+}
+
+/* ==========================================================
+   Bump ring — protuberancias localizadas en el borde.
+   Cada bump es un circulo difuso que se posiciona en el borde
+   del orbe via JS. Cuando su banda de audio esta activa, crece
+   creando una protuberancia visible en ese punto del borde.
+   El orbe SIEMPRE mantiene su forma circular.
+   ========================================================== */
+.bump-ring {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.bump {
+  position: absolute;
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  filter: blur(14px);
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform, opacity;
+  transform: scale(0);
+}
+
+.bump-cyan {
+  background: radial-gradient(circle, var(--orb-cyan) 0%, transparent 70%);
+}
+.bump-magenta {
+  background: radial-gradient(circle, var(--orb-magenta) 0%, transparent 70%);
+}
+
+/* ==========================================================
+   State modes
+   ========================================================== */
+.orb-state-thinking  .orb {
+  box-shadow: 0 0 60px var(--orb-glow-1), 0 0 90px var(--orb-glow-2), inset 0 0 30px rgba(0,0,0,0.7);
+}
+.orb-state-searching .orb {
+  box-shadow: 0 0 70px var(--orb-glow-1), 0 0 100px var(--orb-glow-2), inset 0 0 30px rgba(0,0,0,0.7);
+}
+
+/* ==========================================================
+   Espectrograma — barras de frecuencia debajo del orbe.
+   Colores del tema (--orb-cyan / --orb-magenta) para que
+   cambien al personalizar. JS controla height y opacity.
+   ========================================================== */
+.spectrogram {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5px;
+  height: 22px;
+  width: 220px;
+}
+
+.spec-bar {
+  width: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: hsl(220, 10%, 50%);
+  opacity: 0.2;
+  will-change: height, opacity;
+}
+
+/* Speaking: JS controla box-shadow y glow. Orbe siempre circular. */
+
+.orb-state-listening .orb { animation: orb-breathe 3.5s ease-in-out infinite; }

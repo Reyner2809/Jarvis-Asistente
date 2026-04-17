@@ -265,7 +265,12 @@ def _startup_greeting(user_memory, voice_engine, mic_available, stt, telegram_io
                     break
 
     name_part = f", senor {user_name}" if user_name else ", senor"
-    date_str = now.strftime("%A %d de %B, %I:%M %p")
+
+    # Fecha en espanol (sin depender del locale del SO)
+    _dias = ['Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado', 'Domingo']
+    _meses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+              'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
+    date_str = f"{_dias[now.weekday()]} {now.day} de {_meses[now.month - 1]}, {now.strftime('%I:%M %p')}"
 
     # Variacion con personalidad
     closers = [

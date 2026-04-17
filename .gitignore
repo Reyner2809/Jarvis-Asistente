@@ -6,3 +6,12 @@ __pycache__/
 venv/
 .venv/
 *.log
+
+# Build artifacts
+dist/
+build/
+*.spec.bak
+
+# Modelos TTS offline (se descargan por el instalador, no se suben al repo)
+voice/piper_voices/*.onnx
+voice/piper_voices/*.json
