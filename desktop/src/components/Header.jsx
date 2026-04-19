@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import Icon from './Icon.jsx'
 import { PRESETS, applyTheme } from '../lib/theme.js'
+import TelegramSettings from './TelegramSettings.jsx'
 
 export default function Header({ providerLabel = '—', wsStatus = 'connecting', voiceStatus = 'off', onToggleVoice, isMax, onToggleMax }) {
+  const [tgOpen, setTgOpen] = useState(false)
   const dotColor = wsStatus === 'connected' ? 'var(--ok)' : wsStatus === 'reconnecting' ? 'var(--warn)' : 'var(--err)'
   const dotShadow = `0 0 0 3px ${wsStatus === 'connected' ? 'hsla(145,70%,50%,0.15)' : wsStatus === 'reconnecting' ? 'hsla(38,95%,55%,0.15)' : 'hsla(0,80%,60%,0.15)'}`
   return (
@@ -23,6 +25,9 @@ export default function Header({ providerLabel = '—', wsStatus = 'connecting',
       </div>
 
       <div className="flex items-center gap-0.5" style={{ WebkitAppRegion: 'no-drag' }}>
+        <IconBtn title="Configurar Telegram" onClick={() => setTgOpen(true)}>
+          <Icon name="settings" />
+        </IconBtn>
         <PaletteButton />
         <IconBtn
           title={voiceStatus === 'listening' ? 'Voz: escuchando (click para pausar)' : voiceStatus === 'paused' ? 'Voz pausada (click para activar)' : 'Voz no disponible'}
@@ -41,6 +46,7 @@ export default function Header({ providerLabel = '—', wsStatus = 'connecting',
           </IconBtn>
         </div>
       </div>
+      <TelegramSettings open={tgOpen} onClose={() => setTgOpen(false)} />
     </header>
   )
 }

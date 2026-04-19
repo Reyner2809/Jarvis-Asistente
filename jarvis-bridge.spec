@@ -35,10 +35,20 @@ hiddenimports = [
     'tools.intent_router',
     # Voice
     'voice', 'voice.tts', 'voice.stt',
-    # Providers
-    'providers', 'providers.provider_manager',
-    # Memory
-    'memory',
+    # Providers (modulo real: ai_providers)
+    'ai_providers', 'ai_providers.manager',
+    'ai_providers.claude_provider', 'ai_providers.openai_provider',
+    'ai_providers.gemini_provider', 'ai_providers.ollama_provider',
+    # Memory / knowledge
+    'memory', 'knowledge', 'knowledge.rag',
+    # Telegram
+    'telegram_io', 'telegram_io.bot', 'telebot', 'imageio_ffmpeg',
+    # Scheduler
+    'scheduler',
+    # Chromadb submodulos que PyInstaller no detecta por defecto
+    'chromadb', 'chromadb.telemetry', 'chromadb.telemetry.product',
+    'chromadb.telemetry.product.posthog', 'chromadb.api', 'chromadb.api.segment',
+    'chromadb.config', 'chromadb.db', 'chromadb.segment',
     # Dependencies
     'uvicorn', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto',
     'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto',
@@ -55,16 +65,34 @@ hiddenimports = [
     'rich', 'rich.console', 'rich.panel',
 ]
 
-# Recoger data files de paquetes que lo necesitan
+# Incluir submodulos completos de paquetes que PyInstaller no rastrea bien
+for _pkg in ('chromadb', 'ai_providers', 'edge_tts', 'telebot', 'imageio_ffmpeg',
+             'telegram_io', 'scheduler'):
+    try:
+        _subs = collect_submodules(_pkg)
+        hiddenimports += _subs
+        print(f'[spec] collect_submodules({_pkg!r}): +{len(_subs)} submodulos')
+    except Exception as _e:
+        print(f'[spec] collect_submodules({_pkg!r}) FAILED: {_e!r}')
+
+# Recoger data files del proyecto
+# IMPORTANTE: NO empaquetar .env — contiene credenciales del dev y debe ser
+# generado por el Setup Wizard en cada instalacion (%APPDATA%\Jarvis\.env).
 datas = [
-    # .env y config si existen
-    (os.path.join(ROOT, '.env'), '.') if os.path.exists(os.path.join(ROOT, '.env')) else None,
     (os.path.join(ROOT, 'config.py'), '.'),
 ]
 datas = [d for d in datas if d is not None]
 
-# Agregar carpetas del proyecto como datos
-for folder in ['tools', 'voice', 'providers', 'memory', 'bridge', 'knowledge']:
+# Data files de paquetes externos (chromadb incluye archivos de schema;
+# imageio_ffmpeg trae el binario ffmpeg portable)
+for _pkg in ('chromadb', 'imageio_ffmpeg'):
+    try:
+        datas += collect_data_files(_pkg)
+    except Exception:
+        pass
+
+# Agregar carpetas del proyecto como datos (nota: ai_providers, no providers)
+for folder in ['tools', 'voice', 'ai_providers', 'memory', 'bridge', 'knowledge', 'telegram_io', 'scheduler']:
     folder_path = os.path.join(ROOT, folder)
     if os.path.isdir(folder_path):
         for root_dir, dirs, files in os.walk(folder_path):
@@ -105,8 +133,8 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    console=True,  # console=True para ver logs; cambiar a False para release silencioso
+    upx=False,
+    console=False,  # sin ventana de consola en release (logs via stderr al padre Electron)
     icon=os.path.join(ROOT, 'desktop', 'assets', 'icon.ico')
         if os.path.exists(os.path.join(ROOT, 'desktop', 'assets', 'icon.ico'))
         else None,
@@ -118,7 +146,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='jarvis-bridge',
 )

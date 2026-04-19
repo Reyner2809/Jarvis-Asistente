@@ -280,11 +280,72 @@ ipcMain.handle('setup:startOllama', async () => {
 })
 
 // ---- Setup: .env ----
+// En prod el .env se escribe a %APPDATA%\Jarvis\.env (escribible sin admin,
+// aunque se instale en Program Files). config.py lo busca ahi primero.
+function userEnvPath() {
+  const base = process.env.APPDATA || app.getPath('appData')
+  return join(base, 'Jarvis', '.env')
+}
+
+ipcMain.handle('setup:envExists', async () => {
+  const { existsSync } = await import('node:fs')
+  const p = isDev
+    ? join(__dirname, '..', '..', '.env')
+    : userEnvPath()
+  return existsSync(p)
+})
+
+// Lee los campos actuales de Telegram del .env del usuario
+ipcMain.handle('setup:readTelegram', async () => {
+  const { existsSync, readFileSync } = await import('node:fs')
+  const p = isDev ? join(__dirname, '..', '..', '.env') : userEnvPath()
+  if (!existsSync(p)) return { token: '', user_id: '', enable_voice: true }
+  const text = readFileSync(p, 'utf8')
+  const get = (k) => {
+    const m = text.match(new RegExp('^' + k + '=(.*)$', 'm'))
+    return m ? m[1].trim() : ''
+  }
+  return {
+    token: get('TELEGRAM_BOT_TOKEN'),
+    user_id: get('TELEGRAM_ALLOWED_USERS'),
+    enable_voice: (get('TELEGRAM_ENABLE_VOICE') || 'true').toLowerCase() !== 'false',
+  }
+})
+
+// Actualiza SOLO los 3 campos de Telegram en el .env existente,
+// preservando el resto (provider, modelos, keys, etc.).
+ipcMain.handle('setup:updateTelegram', async (_e, { token, user_id, enable_voice }) => {
+  const { existsSync, readFileSync, writeFileSync, mkdirSync } = await import('node:fs')
+  const p = isDev ? join(__dirname, '..', '..', '.env') : userEnvPath()
+  let text = existsSync(p) ? readFileSync(p, 'utf8') : ''
+  const setKey = (k, v) => {
+    const line = `${k}=${v}`
+    if (text.match(new RegExp('^' + k + '=.*$', 'm'))) {
+      text = text.replace(new RegExp('^' + k + '=.*$', 'm'), line)
+    } else {
+      text = (text.endsWith('\n') || text === '' ? text : text + '\n') + line + '\n'
+    }
+  }
+  setKey('TELEGRAM_BOT_TOKEN', token || '')
+  setKey('TELEGRAM_ALLOWED_USERS', user_id || '')
+  setKey('TELEGRAM_ENABLE_VOICE', enable_voice ? 'true' : 'false')
+  mkdirSync(dirname(p), { recursive: true })
+  writeFileSync(p, text, 'utf8')
+  return true
+})
+
+// Reinicia el bridge Python para que tome la nueva config (no toca Electron).
+ipcMain.handle('bridge:restart', async () => {
+  try { stopBridge() } catch {}
+  await new Promise(r => setTimeout(r, 800))
+  await startBridge()
+  return true
+})
+
 ipcMain.handle('setup:writeEnv', async (_e, config) => {
-  // Encontrar la raiz del proyecto (donde esta el .env)
-  const projectRoot = isDev
-    ? join(__dirname, '..', '..')
-    : join(process.resourcesPath, 'bridge')
+  const envPath = isDev
+    ? join(__dirname, '..', '..', '.env')
+    : userEnvPath()
 
   const lines = [
     '# JARVIS - Configuracion generada por Setup Wizard',
@@ -312,8 +373,9 @@ ipcMain.handle('setup:writeEnv', async (_e, config) => {
     'TELEGRAM_ENABLE_VOICE=true',
   ]
 
-  const { writeFileSync } = await import('node:fs')
-  writeFileSync(join(projectRoot, '.env'), lines.join('\n') + '\n', 'utf8')
+  const { writeFileSync, mkdirSync } = await import('node:fs')
+  mkdirSync(dirname(envPath), { recursive: true })
+  writeFileSync(envPath, lines.join('\n') + '\n', 'utf8')
   return true
 })
 
@@ -400,6 +462,18 @@ function createTray() {
 }
 
 app.whenReady().then(async () => {
+  // Arranque automatico al iniciar Windows — se re-asegura en cada lanzamiento
+  // (el usuario puede desactivarlo borrando el shortcut en shell:startup, pero
+  //  por defecto Jarvis siempre arranca con la PC).
+  if (!isDev) {
+    try {
+      app.setLoginItemSettings({
+        openAtLogin: true,
+        path: process.execPath,
+      })
+    } catch {}
+  }
+
   await startBridge()
   createTray()
   createWindow()

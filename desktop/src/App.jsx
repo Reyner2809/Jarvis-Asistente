@@ -20,11 +20,18 @@ export default function App() {
 
   useEffect(() => { loadSavedTheme() }, [])
 
-  // Verificar si es primera ejecucion
+  // Verificar si es primera ejecucion:
+  //  - Si no hay flag setupDone: mostrar wizard
+  //  - Si el flag esta pero falta el .env de usuario: mostrar wizard igual
+  //    (esto evita que un flag residual de un install previo saltee la config).
   useEffect(() => {
-    const done = localStorage.getItem('jarvis.setupDone')
-    setNeedsSetup(!done)
-    setSetupChecked(true)
+    (async () => {
+      const done = localStorage.getItem('jarvis.setupDone')
+      let envOk = false
+      try { envOk = await window.jarvis.envExists() } catch {}
+      setNeedsSetup(!done || !envOk)
+      setSetupChecked(true)
+    })()
   }, [])
 
   useEffect(() => {

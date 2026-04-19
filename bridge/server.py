@@ -27,6 +27,7 @@ import logging
 import os
 import queue
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -120,6 +121,10 @@ class BridgeState:
     # conecta (para que una sola sesion de bridge no salude dos veces).
     greeting_text: str = ""
     greeting_delivered: bool = False
+    # Telegram bot (opcional — solo si hay token configurado)
+    telegram: Optional[Any] = None
+    telegram_input_queue: Optional["queue.Queue"] = None
+    telegram_stop: threading.Event = threading.Event()
 
 
 state = BridgeState()
@@ -380,9 +385,81 @@ async def lifespan(app: FastAPI):
     state.greeting_text = build_greeting(state.user_memory)
     log.info(f"Saludo preparado: {state.greeting_text}")
 
+    # Telegram bot (opcional — solo si hay token configurado en el .env)
+    try:
+        from telegram_io import TelegramIO
+        state.telegram_input_queue = queue.Queue()
+        voice_for_tg = state.voice._tts if (state.voice and state.voice.available) else None
+        tg = TelegramIO(
+            state.telegram_input_queue,
+            voice_engine=voice_for_tg,
+            knowledge_manager=state.knowledge,
+            provider_manager=state.provider_manager,
+        )
+        if tg.initialize():
+            tg.start()
+            state.telegram = tg
+            log.info(f"Telegram activo: @{tg.bot_username or '?'}")
+
+            # Consumer: procesa mensajes de Telegram con el mismo JarvisProcessor
+            def _telegram_consumer():
+                while not state.telegram_stop.is_set():
+                    try:
+                        item = state.telegram_input_queue.get(timeout=0.5)
+                    except Exception:
+                        continue
+                    if not (isinstance(item, tuple) and len(item) >= 3):
+                        continue
+                    source, text, chat_id = item[0], item[1], item[2]
+                    if source != "telegram" or not text or chat_id is None:
+                        continue
+                    as_voice = len(item) >= 4 and bool(item[3])
+                    try:
+                        result = state.processor.process(text, lambda e: None)
+                        reply = (result.response or "").strip()
+                        if not reply:
+                            continue
+                        if as_voice:
+                            try:
+                                state.telegram.send_voice_reply(chat_id, reply)
+                            except Exception:
+                                state.telegram.send_reply(chat_id, reply)
+                        else:
+                            state.telegram.send_reply(chat_id, reply)
+                    except Exception as e:
+                        log.warning(f"Telegram consumer error: {e}")
+                        try:
+                            state.telegram.send_reply(chat_id, f"Error: {e}")
+                        except Exception:
+                            pass
+
+            consumer_t = threading.Thread(
+                target=_telegram_consumer,
+                daemon=True,
+                name="jarvis-telegram-consumer",
+            )
+            consumer_t.start()
+
+            # Saludo proactivo a los usuarios autorizados
+            try:
+                for uid in (tg.allowed_users or []):
+                    try:
+                        tg.send_reply(uid, state.greeting_text)
+                    except Exception as e:
+                        log.debug(f"No se pudo enviar saludo a {uid}: {e}")
+            except Exception:
+                pass
+    except Exception as e:
+        log.info(f"Telegram no iniciado: {e}")
+
     log.info("Jarvis Bridge listo.")
     yield
     log.info("Cerrando Jarvis Bridge...")
+    try:
+        state.telegram_stop.set()
+        if state.telegram: state.telegram.stop()
+    except Exception:
+        pass
     try:
         if state.voice: state.voice.stop()
     except Exception:

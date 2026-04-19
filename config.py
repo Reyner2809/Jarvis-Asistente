@@ -1,7 +1,16 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Carga .env con prioridad:
+#   1. %APPDATA%\Jarvis\.env  -> escrito por el Setup Wizard al instalar
+#   2. <CWD>\.env              -> modo desarrollo local
+_appdata = os.environ.get("APPDATA")
+_user_env = Path(_appdata) / "Jarvis" / ".env" if _appdata else None
+if _user_env and _user_env.exists():
+    load_dotenv(_user_env)
+else:
+    load_dotenv()
 
 
 class Config:
